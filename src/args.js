@@ -80,6 +80,8 @@ function buildYtdlpArgs(job, ctx) {
   args.push(...ytdlpFormatArgs(job));
   args.push('--progress', '--progress-template', PROGRESS_TEMPLATE);
   args.push('--print', 'after_move:BLFILE|%(filepath)s');
+  // Windows'ta konsol çıktısı UTF-8 olmayabilir (Türkçe karakterli başlıklar bozulur); dosyaya UTF-8 yazılır.
+  if (ctx.printFile) args.push('--print-to-file', 'after_move:%(filepath)s', ctx.printFile);
   args.push('-o', template, '--', job.url);
   return args;
 }

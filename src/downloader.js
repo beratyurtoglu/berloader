@@ -15,24 +15,33 @@ const RUNNING = ['downloading', 'converting', 'analyzing'];
 const MIN_FREE_BYTES = 500 * 1024 * 1024;
 const NOLOG = { info() {}, warn() {}, error() {} };
 
-// outDir içinde since'den sonra değişen en yeni medya dosyasını bulur (yalnızca üst düzey).
-function findNewestOutput(dir, since, format) {
-  const audio = new Set(['.mp3', '.m4a', '.wav', '.opus', '.aac', '.ogg']);
-  const video = new Set(['.mp4', '.mkv', '.webm', '.mov', '.m4v']);
-  let best = null;
-  let bestT = 0;
+// Bildirilen yol bozuk/eksikse dosyayı klasörde bulur. Önce addaki "[video-id]" ile eşleştirir
+// (konsol kodlaması bozulsa da id ASCII'dir), olmazsa since'den sonra değişen en yeni medyayı alır.
+function findNewestOutput(dir, since, reported) {
+  const media = new Set(['.mp3', '.m4a', '.wav', '.opus', '.aac', '.ogg', '.mp4', '.mkv', '.webm', '.mov', '.m4v']);
+  const idm = reported ? String(reported).match(/\[([^\[\]]+)\]\.[A-Za-z0-9]+$/) : null;
+  const id = idm ? `[${idm[1]}]` : null;
+  let byId = null, byIdT = 0, byTime = null, byTimeT = 0;
   try {
     for (const name of fs.readdirSync(dir)) {
       const ext = path.extname(name).toLowerCase();
-      if (!(audio.has(ext) || video.has(ext))) continue;
-      if (/\.f\d+\./.test(name) || name.endsWith('.part')) continue;
-      const st = fs.statSync(path.join(dir, name));
-      if (!st.isFile() || st.mtimeMs < since || st.size === 0) continue;
-      if (format === 'mp4' && !video.has(ext) && !audio.has(ext)) continue;
-      if (st.mtimeMs > bestT) { bestT = st.mtimeMs; best = path.join(dir, name); }
+      if (!media.has(ext) || /\.f\d+\./.test(name)) continue;
+      const full = path.join(dir, name);
+      const st = fs.statSync(full);
+      if (!st.isFile() || st.size === 0) continue;
+      const t = Math.max(st.mtimeMs, st.ctimeMs, st.birthtimeMs || 0);
+      if (id && name.includes(id) && t > byIdT) { byIdT = t; byId = full; }
+      if (t >= since && t > byTimeT) { byTimeT = t; byTime = full; }
     }
   } catch (_) { /* yok say */ }
-  return best;
+  return byId || byTime;
+}
+
+function listDirTail(dir) {
+  try {
+    return fs.readdirSync(dir).map((n) => ({ n, t: fs.statSync(path.join(dir, n)).mtimeMs }))
+      .sort((a, b) => b.t - a.t).slice(0, 5).map((x) => `${x.n} @${new Date(x.t).toISOString()}`);
+  } catch (e) { return String(e.message); }
 }
 
 function utf8Env() {
@@ -529,7 +538,10 @@ class Downloader extends EventEmitter {
       } catch (e) {
         return reject(e);
       }
+      try { fs.mkdirSync(this.tmpDir, { recursive: true }); } catch (_) { /* yok say */ }
+      const printFile = path.join(this.tmpDir, `outfile-${job.id.slice(0, 8)}-${Date.now()}.txt`);
       const args = A.buildYtdlpArgs(job, {
+        printFile,
         settings: this.settings.data,
         ffmpegPath: this.engine.ffmpegPath(),
         denoPath: this.engine.has('deno') ? this.engine.bin('deno') : null,
@@ -593,11 +605,17 @@ class Downloader extends EventEmitter {
       proc.on('close', async (code) => {
         if (job._canceled) return resolve();
         job._stderrTail = errLines.slice(-6).join(' | ');
+        try {
+          const lines = fs.readFileSync(printFile, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+          const last = lines[lines.length - 1];
+          if (last && fs.existsSync(last)) finalFile = last;
+        } catch (_) { /* yazılmamış olabilir */ }
+        try { fs.unlinkSync(printFile); } catch (_) { /* yok say */ }
         // yt-dlp başarıyla bittiyse ama bildirilen yol bulunamıyorsa (özel karakterli başlık,
         // farklı uzantı vb.) klasörde bu işin ürettiği en yeni dosyayı ara.
         if (code === 0 && (!finalFile || !fs.existsSync(finalFile))) {
-          const found = findNewestOutput(outDir, startedAt, job.format);
-          this.log.warn('yt-dlp 0 ile bitti ama dosya yolu doğrulanamadı', { reported: finalFile, found, out: outLines.slice(-5), err: errLines.slice(-5) });
+          const found = findNewestOutput(outDir, startedAt, finalFile);
+          this.log.warn('yt-dlp 0 ile bitti ama dosya yolu doğrulanamadı', { reported: finalFile, found, outDir, dir: found ? undefined : listDirTail(outDir), err: errLines.slice(-5) });
           if (found) finalFile = found;
         }
         // TikTok/Instagram "fotoğraf gönderisi" video yerine yalnızca ses verirse görsel motoruna geç.
