@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' data: https:; style-src 'self'; script-src 'self'; connect-src 'none'; object-src 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BerLoader</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img class="logo" src="assets/logo.png" alt="" width="38" height="38">
+      <span class="brand-name">BerLoader</span>
+    </div>
+    <div class="top-actions">
+      <button id="updateBanner" class="pill hidden" type="button"></button>
+      <button id="openSettings" class="ghost" type="button">Ayarlar</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="card" id="inputCard">
+      <div class="step"><span class="step-no">1</span><span class="step-title">Platform</span><span class="step-req">zorunlu</span></div>
+      <div id="platforms" class="plats" role="group" aria-label="Platform">
+        <button class="plat" type="button" data-platform="youtube" aria-pressed="false"><i class="dot"></i>YouTube</button>
+        <button class="plat" type="button" data-platform="instagram" aria-pressed="false"><i class="dot"></i>Instagram</button>
+        <button class="plat" type="button" data-platform="tiktok" aria-pressed="false"><i class="dot"></i>TikTok</button>
+        <button class="plat" type="button" data-platform="x" aria-pressed="false"><i class="dot"></i>X</button>
+        <button class="plat" type="button" data-platform="pinterest" aria-pressed="false"><i class="dot"></i>Pinterest</button>
+      </div>
+      <div id="platformHint" class="plat-hint">İndirme yapacağın platformu seç.</div>
+
+      <div class="step second"><span class="step-no">2</span><span class="step-title">Bağlantı</span></div>
+      <div class="row">
+        <input id="urlInput" class="input grow" type="text" spellcheck="false" autocomplete="off"
+               placeholder="Bağlantıyı buraya yapıştır" aria-label="Bağlantı">
+        <button id="pasteBtn" class="secondary" type="button">Yapıştır</button>
+      </div>
+      <div class="row options">
+        <select id="formatSelect" class="select" aria-label="Biçim">
+          <option value="mp4">MP4 · Video</option>
+          <option value="mp3">MP3 · Ses</option>
+          <option value="m4a">M4A · Ses</option>
+          <option value="wav">WAV · Ses</option>
+          <option value="image">Görsel</option>
+        </select>
+        <select id="qualitySelect" class="select" aria-label="Kalite">
+          <option value="best">En yüksek kalite</option>
+          <option value="2160">En çok 4K (2160p)</option>
+          <option value="1440">En çok 2K (1440p)</option>
+          <option value="1080">En çok 1080p</option>
+          <option value="720">En çok 720p</option>
+          <option value="480">En çok 480p</option>
+        </select>
+        <span id="hint" class="hint grow"></span>
+        <button id="downloadBtn" class="primary" type="button">İndir</button>
+      </div>
+    </section>
+
+    <section class="list-head">
+      <div class="list-title">
+        <h2>İndirmeler</h2>
+        <span id="jobCount" class="muted">0 işlem</span>
+      </div>
+      <div class="list-actions">
+        <button id="pauseBtn" class="link" type="button">Kuyruğu duraklat</button>
+        <button id="clearBtn" class="link" type="button">Tamamlananları temizle</button>
+      </div>
+    </section>
+
+    <section id="jobList" class="job-list" aria-live="polite"></section>
+    <div id="emptyState" class="empty">Henüz indirme yok.</div>
+  </main>
+
+  <footer class="footer">
+    <div class="path"><span class="muted">Klasör:</span> <span id="dirLabel"></span></div>
+    <div class="footer-right">
+      <span id="engineLabel" class="muted"></span>
+      <button id="openFolder" class="link" type="button">Klasörü aç</button>
+    </div>
+  </footer>
+
+  <!-- Oynatma listesi onayı -->
+  <div id="playlistModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-box small">
+      <h3>Oynatma listesi</h3>
+      <p id="playlistText"></p>
+      <div class="modal-actions">
+        <button id="playlistNo" class="secondary" type="button">Hayır</button>
+        <button id="playlistYes" class="primary" type="button">Evet, tamamını indir</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Çoklu görsel / video seçimi -->
+  <div id="galleryModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-box wide">
+      <div class="modal-head">
+        <h3 id="galleryTitle">Hangilerini indirmek istiyorsun?</h3>
+        <span id="galleryCount" class="muted"></span>
+      </div>
+      <div id="galleryGrid" class="gallery-grid"></div>
+      <div class="modal-actions">
+        <button id="galleryAll" class="link" type="button">Tümünü seç</button>
+        <button id="galleryNone" class="link" type="button">Seçimi temizle</button>
+        <span class="grow"></span>
+        <button id="galleryCancel" class="secondary" type="button">Vazgeç</button>
+        <button id="galleryOk" class="primary" type="button">İndir</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ayarlar -->
+  <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-box settings">
+      <div class="modal-head">
+        <h3>Ayarlar</h3>
+        <button id="closeSettings" class="ghost" type="button">Kapat</button>
+      </div>
+
+      <div class="group">
+        <h4>İndirme</h4>
+        <div class="field">
+          <span class="field-label">İndirme klasörü</span>
+          <div class="row">
+            <input id="setDir" class="input grow" type="text" readonly>
+            <button id="setDirBtn" class="secondary" type="button">Seç</button>
+          </div>
+        </div>
+        <label class="check">
+          <input id="setByPlatform" type="checkbox">
+          <span>Platforma göre alt klasörlere ayır (YouTube, Instagram, …)</span>
+        </label>
+        <div class="field inline">
+          <span class="field-label">Aynı anda indirilecek sayısı</span>
+          <select id="setConcurrent" class="select short">
+            <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option>
+          </select>
+        </div>
+        <label class="check">
+          <input id="setCompat" type="checkbox">
+          <span>Adobe (After Effects, Premiere) ve CapCut uyumu: videoyu H.264 + AAC .mp4 yap ve doğrula; görselleri PNG/JPG olarak kaydet</span>
+        </label>
+      </div>
+
+      <div class="group">
+        <h4>Hesaplar</h4>
+        <p class="note">Instagram, X ve TikTok çoğu içerik için giriş ister. Giriş penceresi yalnızca BerLoader'a aittir; şifren saklanmaz, yalnızca platformun verdiği oturum bu bilgisayarda tutulur.</p>
+        <div id="accountList" class="accounts"></div>
+      </div>
+
+      <div class="group">
+        <h4>Gelişmiş çerez</h4>
+        <div class="field inline">
+          <span class="field-label">Tarayıcı çerezi (hesap girişi yoksa)</span>
+          <select id="setCookies" class="select">
+            <option value="none">Kullanma</option>
+            <option value="firefox">Firefox</option>
+            <option value="edge">Microsoft Edge</option>
+            <option value="chrome">Google Chrome</option>
+            <option value="brave">Brave</option>
+            <option value="opera">Opera</option>
+          </select>
+        </div>
+        <div class="field">
+          <span class="field-label">veya cookies.txt dosyası</span>
+          <div class="row">
+            <input id="setCookieFile" class="input grow" type="text" readonly placeholder="Seçilmedi">
+            <button id="setCookieFileBtn" class="secondary" type="button">Seç</button>
+            <button id="setCookieFileClear" class="secondary" type="button">Temizle</button>
+          </div>
+        </div>
+        <p class="note">Chrome, Edge ve Brave çerezleri yeni sürümlerde dışarıdan okunamayabilir; en sorunsuzu Firefox ya da yukarıdaki hesap girişidir. Hesap girişi varsa o kullanılır.</p>
+      </div>
+
+      <div class="group">
+        <h4>İndirme motorları</h4>
+        <div class="field inline">
+          <span class="field-label">yt-dlp kanalı</span>
+          <select id="setChannel" class="select">
+            <option value="stable">Kararlı</option>
+            <option value="nightly">Nightly (düzeltmeler daha erken gelir)</option>
+          </select>
+        </div>
+        <label class="check">
+          <input id="setAutoEngine" type="checkbox">
+          <span>Motorları açılışta ve 6 saatte bir otomatik güncelle</span>
+        </label>
+        <label class="check">
+          <input id="setSolver" type="checkbox">
+          <span>YouTube çözücü bileşenini GitHub'dan güncel tut</span>
+        </label>
+        <div id="engineInfo" class="info-box"></div>
+        <div class="row">
+          <button id="engineUpdateBtn" class="secondary" type="button">Motorları şimdi güncelle</button>
+          <span id="engineMsg" class="hint grow"></span>
+        </div>
+      </div>
+
+      <div class="group">
+        <h4>Uygulama</h4>
+        <div class="field inline">
+          <span class="field-label">Sürüm</span>
+          <span id="appVersion" class="muted"></span>
+        </div>
+        <label class="check">
+          <input id="setAutoApp" type="checkbox">
+          <span>Uygulama güncellemelerini otomatik indir</span>
+        </label>
+        <div class="row">
+          <button id="appUpdateBtn" class="secondary" type="button">Güncellemeleri denetle</button>
+          <span id="appUpdateMsg" class="hint grow"></span>
+        </div>
+      </div>
+
+      <div class="group">
+        <h4>Tanılama</h4>
+        <p class="note">Bir şey çalışmazsa "Tanılama bilgisini kopyala" ile sürümleri, ayarları ve son günlük satırlarını panoya alıp bana yapıştırabilirsin. Bağlantılar içerir, çerez ve şifre içermez.</p>
+        <div class="row">
+          <button id="copyDiagBtn" class="secondary" type="button">Tanılama bilgisini kopyala</button>
+          <button id="openLogsBtn" class="secondary" type="button">Günlük klasörünü aç</button>
+          <span id="diagMsg" class="hint grow"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
