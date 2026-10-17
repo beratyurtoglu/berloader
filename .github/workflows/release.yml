@@ -27,6 +27,14 @@ jobs:
           fi
       - run: npm ci
       - run: npm test
-      - run: npx electron-builder --win nsis --publish always
+      - name: Kurulum dosyasını derle (yayınlamadan)
+        run: npx electron-builder --win nsis --publish never
+      - name: Tek bir release olarak yayınla
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/*.exe dist/*.exe.blockmap dist/latest.yml \
+            --title "${GITHUB_REF_NAME#v}" \
+            --generate-notes
