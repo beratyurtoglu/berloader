@@ -9,7 +9,8 @@ const DEFAULTS = {
   format: 'mp4', // mp4 | mp3 | m4a | wav | image
   quality: 'best', // best | 2160 | 1440 | 1080 | 720 | 480
   editorCompat: true, // Adobe / CapCut için H.264 + AAC garantisi
-  concurrent: 2,
+  concurrent: 1, // sırayla indir: bir video bitmeden sıradaki başlamaz
+  autoClearDone: true, // biten işleri 24 saat sonra listeden kaldır (dosyalara dokunmaz)
   cookiesBrowser: 'none', // none | firefox | edge | chrome | brave | opera
   cookiesFile: '',
   engineChannel: 'stable', // stable | nightly (yt-dlp)
@@ -59,6 +60,12 @@ class Settings extends JsonFile {
   constructor() {
     super('settings.json', DEFAULTS);
     if (!FORMATS.includes(this.data.format)) this.data.format = 'mp4';
+    // v2: eski kurulumlarda kayıtlı "2 eşzamanlı" ayarını sıralı indirmeye çevir.
+    if ((Number(this.data.settingsVersion) || 1) < 2) {
+      this.data.concurrent = 1;
+      this.data.settingsVersion = 2;
+      this.save(true);
+    }
   }
   all() {
     return { ...this.data, downloadDir: this.downloadDir() };
@@ -70,7 +77,7 @@ class Settings extends JsonFile {
     for (const k of Object.keys(partial)) {
       if (k in DEFAULTS) this.data[k] = partial[k];
     }
-    this.data.concurrent = Math.min(5, Math.max(1, Number(this.data.concurrent) || 2));
+    this.data.concurrent = Math.min(5, Math.max(1, Number(this.data.concurrent) || 1));
     if (!FORMATS.includes(this.data.format)) this.data.format = 'mp4';
     this.save();
     return this.all();

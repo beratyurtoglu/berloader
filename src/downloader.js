@@ -7,12 +7,23 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 const P = require('./platform');
 const A = require('./args');
 
 const TERMINAL = new Set(['done', 'error', 'canceled']);
 const RUNNING = ['downloading', 'converting', 'analyzing'];
 const MIN_FREE_BYTES = 500 * 1024 * 1024;
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+const ORIGINS = {
+  youtube: 'https://www.youtube.com/',
+  instagram: 'https://www.instagram.com/',
+  tiktok: 'https://www.tiktok.com/',
+  x: 'https://x.com/',
+  pinterest: 'https://www.pinterest.com/'
+};
+const MIME_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'video/mp4': 'mp4' };
 const NOLOG = { info() {}, warn() {}, error() {} };
 
 // Bildirilen yol bozuk/eksikse dosyayı klasörde bulur. Önce addaki "[video-id]" ile eşleştirir
@@ -42,6 +53,58 @@ function listDirTail(dir) {
     return fs.readdirSync(dir).map((n) => ({ n, t: fs.statSync(path.join(dir, n)).mtimeMs }))
       .sort((a, b) => b.t - a.t).slice(0, 5).map((x) => `${x.n} @${new Date(x.t).toISOString()}`);
   } catch (e) { return String(e.message); }
+}
+
+// JPEG boyutunu (genişlik/yükseklik) başlıktan okur.
+function jpegSize(buf) {
+  try {
+    if (buf[0] !== 0xff || buf[1] !== 0xd8) return null;
+    let i = 2;
+    while (i + 9 < buf.length) {
+      if (buf[i] !== 0xff) {
+        i++;
+        continue;
+      }
+      const m = buf[i + 1];
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { h: buf.readUInt16BE(i + 5), w: buf.readUInt16BE(i + 7) };
+      i += 2 + buf.readUInt16BE(i + 2);
+    }
+  } catch (_) { /* yok say */ }
+  return null;
+}
+
+// Klasörü (alt klasörler dahil) tarar; doğal sırayla dosya yolları döner.
+function scanFiles(dir) {
+  const out = [];
+  const walk = (d) => {
+    let names = [];
+    try { names = fs.readdirSync(d); } catch (_) { return; }
+    for (const n of names) {
+      const full = path.join(d, n);
+      let st;
+      try { st = fs.statSync(full); } catch (_) { continue; }
+      if (st.isDirectory()) walk(full);
+      else if (st.size > 0 && !n.endsWith('.part') && !n.endsWith('.tmp')) out.push(full);
+    }
+  };
+  walk(dir);
+  return out.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+function moveFile(src, dst) {
+  try {
+    fs.renameSync(src, dst);
+  } catch (_) {
+    fs.copyFileSync(src, dst);
+    fs.unlinkSync(src);
+  }
+}
+
+// gallery-dl çıktısından gerçek hata satırını seçer ([info]/[warning] satırlarını saymaz).
+function pickGalleryError(text) {
+  const lines = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const hit = [...lines].reverse().find((l) => !/\[(info|debug)\]/i.test(l) && /\[error\]|error|exception|forbidden|unauthorized|not found|login|private|denied|failed|HTTP/i.test(l));
+  return hit || '';
 }
 
 function utf8Env() {
@@ -125,7 +188,9 @@ class Downloader extends EventEmitter {
     this.jobs = new Map();
     this.paused = false;
     this._lastEmit = new Map();
+    this._galleryCache = new Map();
     this._restoreHistory();
+    this.purgeOld();
   }
 
   // ---------- Durum ----------
@@ -171,7 +236,36 @@ class Downloader extends EventEmitter {
     const phaseChanged = patch.phase !== undefined && patch.phase !== job.phase;
     Object.assign(job, patch);
     this._emit(job, force || phaseChanged);
-    if (TERMINAL.has(job.status)) this._persist();
+    if (TERMINAL.has(job.status)) {
+      if (!job.finishedAt) job.finishedAt = Date.now();
+      this._persist();
+    }
+  }
+
+  // 24 saatten eski biten işleri listeden kaldırır (indirilen dosyalara dokunmaz).
+  purgeOld(maxAgeMs = 24 * 3600 * 1000) {
+    if (!this.settings.data.autoClearDone) return 0;
+    const now = Date.now();
+    let n = 0;
+    for (const [id, j] of [...this.jobs.entries()]) {
+      if (!TERMINAL.has(j.status)) continue;
+      if (now - (j.finishedAt || j.createdAt || 0) < maxAgeMs) continue;
+      this.jobs.delete(id);
+      this._lastEmit.delete(id);
+      this.emit('removed', id);
+      n++;
+    }
+    if (n) {
+      this.log.info('Otomatik temizlik: eski işler listeden kaldırıldı', n);
+      this._persist();
+    }
+    return n;
+  }
+
+  startAutoClean() {
+    this.purgeOld();
+    this._cleanTimer = setInterval(() => this.purgeOld(), 30 * 60 * 1000);
+    if (this._cleanTimer.unref) this._cleanTimer.unref();
   }
 
   // ---------- Hesap çerezleri ----------
@@ -217,17 +311,18 @@ class Downloader extends EventEmitter {
 
     const format = opts.format || this.settings.data.format;
     const imageMode = format === 'image';
-    if (imageMode && !P.IMAGE_PLATFORMS.includes(p.platform)) {
-      throw new Error('YouTube için görsel indirme yok. Biçim olarak video veya ses seç.');
+    const ytThumb = imageMode && p.platform === 'youtube'; // YouTube'da "Görsel" = kapak resmi
+    if (imageMode && !ytThumb && !P.IMAGE_PLATFORMS.includes(p.platform)) {
+      throw new Error('Bu platform için görsel indirme desteklenmiyor.');
     }
 
     // Yalnızca gereken motorları bekler; hepsinin inmesini beklemez.
-    const need = imageMode ? ['gallerydl'] : p.platform === 'youtube' ? ['ytdlp', 'deno'] : ['ytdlp'];
+    const need = ytThumb ? ['ytdlp'] : imageMode ? ['gallerydl'] : p.platform === 'youtube' ? ['ytdlp', 'deno'] : ['ytdlp'];
     await this.engine.ensure(need);
-    if (imageMode && !this.engine.has('gallerydl')) {
+    if (imageMode && !ytThumb && !this.engine.has('gallerydl')) {
       throw new Error('Görsel indirme motoru (gallery-dl) hazır değil. İnternet bağlantını kontrol et; Ayarlar > Motorlar bölümünden güncelleyebilirsin.');
     }
-    if (!imageMode && !this.engine.has('ytdlp')) {
+    if ((!imageMode || ytThumb) && !this.engine.has('ytdlp')) {
       throw new Error('İndirme motoru (yt-dlp) henüz hazır değil. İnternet bağlantını kontrol edip biraz sonra tekrar dene.');
     }
 
@@ -244,10 +339,21 @@ class Downloader extends EventEmitter {
     const imageMode = format === 'image';
     const audioMode = ['mp3', 'm4a', 'wav'].includes(format);
 
+    // YouTube kapak resmi: yalnızca başlık ve video kimliği gerekir.
+    if (imageMode && p.platform === 'youtube') {
+      let r;
+      try {
+        r = await this._inspectYtdlp(url, p, cookieFile);
+      } catch (e) {
+        throw new Error(A.friendlyError(e.message));
+      }
+      return r.kind === 'video' ? { ...r, route: 'thumb' } : r;
+    }
+
     // Yalnızca görsel: gallery-dl, videolar listeden çıkarılır.
     if (imageMode) {
       const g = await this._inspectGallery(url, p, cookieFile);
-      if (!g.result) throw new Error(A.friendlyError(g.error) || 'Bu bağlantıda indirilebilir görsel bulunamadı.');
+      if (!g.result) throw new Error(this._galleryFailMessage(p, g.error, cookieFile));
       const items = g.result.items ? g.result.items.filter((i) => i.type === 'image') : [];
       if (g.result.kind === 'video' || !items.length) throw new Error('Bu gönderide görsel yok; yalnızca video içeriyor.');
       return { ...g.result, kind: 'gallery', items };
@@ -339,21 +445,49 @@ class Downloader extends EventEmitter {
     };
   }
 
-  // Dönüş: { result, error }. result yoksa error nedenini taşır.
-  async _inspectGallery(url, p, cookieFile) {
+  // Giriş gerektiren platformlarda boş sonuç için anlaşılır mesaj.
+  _galleryFailMessage(p, rawError, cookieFile) {
+    if (rawError) {
+      const f = A.friendlyError(rawError);
+      if (f && f !== 'Bilinmeyen hata.') return f;
+    }
+    const label = P.PLATFORM_LABELS[p.platform] || 'Platform';
+    if (!cookieFile && ['instagram', 'tiktok', 'x'].includes(p.platform)) {
+      return `${label} bu gönderiyi giriş yapmadan vermedi. Ayarlar > Hesaplar bölümünden ${label} hesabına giriş yapıp tekrar dene.`;
+    }
+    return 'Bu bağlantıda indirilebilir görsel bulunamadı.';
+  }
+
+  // gallery-dl ile öğe listesini çıkarır ve önbelleğe alır (doğrudan indirme yedeği bunu kullanır).
+  async _galleryRaw(url, p, cookieFile) {
     const bin = this.engine.bin('gallerydl');
     let lastErr = '';
+    let allErr = '';
+    let code = null;
     const run = async (resolve) => {
       const r = await runCapture(bin, A.buildGalleryListArgs(url, this.settings.data, resolve, cookieFile), { timeout: 120000 });
-      if (r.err && r.err.trim()) lastErr = lastLine(r.err, /error|login|private|not found/i);
+      code = r.code;
+      if (r.err && r.err.trim()) {
+        allErr += r.err.trim() + '\n';
+        lastErr = pickGalleryError(r.err) || lastErr;
+      }
       return A.parseGalleryJson(r.out);
     };
     let parsed = await run(false);
     if (!parsed.items.length) parsed = await run(true);
-    if (!parsed.items.length) {
-      this.log.warn('gallery-dl boş döndü:', p.platform, lastErr);
-      return { result: null, error: lastErr };
+    if (parsed.items.length) {
+      this._galleryCache.set(url, { at: Date.now(), items: parsed.items, meta: parsed.meta });
+      if (this._galleryCache.size > 30) this._galleryCache.delete(this._galleryCache.keys().next().value);
+    } else {
+      this.log.warn('gallery-dl boş döndü:', { platform: p.platform, code, loggedIn: !!cookieFile, err: allErr.slice(-500) });
     }
+    return { parsed, lastErr };
+  }
+
+  // Dönüş: { result, error }. result yoksa error nedenini taşır.
+  async _inspectGallery(url, p, cookieFile) {
+    const { parsed, lastErr } = await this._galleryRaw(url, p, cookieFile);
+    if (!parsed.items.length) return { result: null, error: lastErr };
 
     const title = A.galleryTitle(parsed.meta, P.PLATFORM_LABELS[p.platform]);
     const items = parsed.items;
@@ -392,9 +526,11 @@ class Downloader extends EventEmitter {
     const list = Array.isArray(payload.batch) ? payload.batch : [payload];
     const created = [];
     for (const p of list) {
+      const jobFormat = p.format || s.format;
       const job = {
         id: crypto.randomUUID(),
-        route: p.route || 'ytdlp',
+        // YouTube + "Görsel" = kapak resmi indirme
+        route: jobFormat === 'image' && p.platform === 'youtube' ? 'thumb' : p.route || 'ytdlp',
         url: p.url,
         platform: p.platform || 'other',
         title: p.title || p.url,
@@ -416,11 +552,13 @@ class Downloader extends EventEmitter {
         editorReady: null,
         note: null,
         error: null,
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        finishedAt: null
       };
       this.jobs.set(job.id, job);
       created.push(job);
       this._emit(job, true);
+      this._inlineThumb(job);
     }
     this._persist();
     this._pump();
@@ -435,7 +573,7 @@ class Downloader extends EventEmitter {
 
   _pump() {
     if (this.paused) return;
-    const limit = this.settings.data.concurrent || 2;
+    const limit = this.settings.data.concurrent || 1;
     let running = [...this.jobs.values()].filter((j) => RUNNING.includes(j.status)).length;
     for (const job of this.jobs.values()) {
       if (running >= limit) break;
@@ -460,7 +598,7 @@ class Downloader extends EventEmitter {
     if (!job || !TERMINAL.has(job.status) || job.status === 'done') return;
     job._canceled = false;
     job._engineRetried = false;
-    this._set(job, { status: 'queued', phase: 'queued', progress: 0, speed: null, eta: null, error: null, note: null });
+    this._set(job, { status: 'queued', phase: 'queued', progress: 0, speed: null, eta: null, error: null, note: null, finishedAt: null });
     this._pump();
   }
 
@@ -508,12 +646,16 @@ class Downloader extends EventEmitter {
     this.log.info('İş başladı:', { id: job.id.slice(0, 8), platform: job.platform, route: job.route, format: job.format, quality: job.quality, url: job.url });
     let cookies = { file: null, cleanup() {} };
     try {
-      await this.engine.ensure(job.route === 'gallery' ? ['gallerydl'] : ['ytdlp']);
-      if (job._canceled) return;
-      cookies = await this._prepareCookies(job.id.slice(0, 8));
-      job._cookieFile = cookies.file;
-      if (job.route === 'gallery') await this._runGallery(job);
-      else await this._runYtdlp(job);
+      if (job.route === 'thumb') {
+        await this._runThumb(job);
+      } else {
+        await this.engine.ensure(job.route === 'gallery' ? ['gallerydl'] : ['ytdlp']);
+        if (job._canceled) return;
+        cookies = await this._prepareCookies(job.id.slice(0, 8));
+        job._cookieFile = cookies.file;
+        if (job.route === 'gallery') await this._runGallery(job);
+        else await this._runYtdlp(job);
+      }
     } catch (e) {
       this.log.error('İş hatası:', job.platform, job.url, e.message, job._stderrTail || '');
       if (!job._canceled) this._set(job, { status: 'error', phase: 'error', speed: null, eta: null, error: A.friendlyError(e.message) });
@@ -660,6 +802,12 @@ class Downloader extends EventEmitter {
           if (job._canceled) return resolve();
           this._set(job, { status: 'done', phase: 'done', progress: 100, speed: null, eta: null, filePath: file, info, editorReady: ready });
           this.log.info('İş bitti:', job.platform, file, info || '');
+          // Kapak: videonun kendi karesi (uzaktaki kapak adresi açılmasa da her zaman görünür).
+          if (job.format === 'mp4') {
+            this._frameThumb(file).then((t) => {
+              if (t && this.jobs.has(job.id)) this._set(job, { thumbnail: t });
+            });
+          }
           resolve();
         } catch (e) {
           reject(e);
@@ -774,8 +922,22 @@ class Downloader extends EventEmitter {
       } catch (e) {
         return reject(e);
       }
+      // Dosyalar önce geçici bir klasöre iner; sonra adlandırılıp asıl klasöre taşınır.
+      // Böylece gallery-dl'in yazdığı yola bağlı kalmadan indirilenler klasörden bulunur.
+      const staging = path.join(outDir, `.berloader-${job.id.slice(0, 8)}`);
+      const cleanup = () => {
+        try {
+          fs.rmSync(staging, { recursive: true, force: true });
+        } catch (_) { /* yok say */ }
+      };
+      try {
+        cleanup();
+        fs.mkdirSync(staging, { recursive: true });
+      } catch (e) {
+        return reject(e);
+      }
       const total = job.selection ? job.selection.length : null;
-      const args = A.buildGalleryArgs(job, { settings: this.settings.data, outDir, cookieFile: job._cookieFile });
+      const args = A.buildGalleryArgs(job, { settings: this.settings.data, outDir: staging, cookieFile: job._cookieFile });
       this._set(job, { status: 'downloading', phase: 'downloading', progress: 0, itemCount: total });
 
       const proc = spawn(bin, args, { windowsHide: true, env: utf8Env() });
@@ -800,26 +962,45 @@ class Downloader extends EventEmitter {
           if (errLines.length > 60) errLines.shift();
         })
       );
-      proc.on('error', reject);
+      proc.on('error', (e) => {
+        cleanup();
+        reject(e);
+      });
       proc.on('close', async (code) => {
-        if (job._canceled) return resolve();
-        job._stderrTail = errLines.slice(-6).join(' | ');
-        const existing = files.filter((f) => fs.existsSync(f));
-        if (existing.length === 0) {
-          const errText = errLines.filter((l) => /error/i.test(l)).pop() || errLines.pop() || `gallery-dl hata kodu ${code}`;
-          if (!job._engineRetried && A.isEngineBreakage(errText)) {
-            job._engineRetried = true;
-            this.log.warn('Motor kırılması şüphesi, güncelleniyor:', errText);
-            this._set(job, { phase: 'updating' });
-            await this.engine.update({ only: ['gallerydl'], reason: 'indirme hatası sonrası' });
-            if (job._canceled) return resolve();
-            return this._runGallery(job).then(resolve, reject);
-          }
-          return reject(new Error(errText));
+        if (job._canceled) {
+          cleanup();
+          return resolve();
         }
+        job._stderrTail = errLines.slice(-6).join(' | ');
         try {
+          let existing = [...new Set(files)].filter((f) => fs.existsSync(f));
+          if (existing.length === 0) existing = scanFiles(staging);
+          if (existing.length === 0) {
+            const errText = pickGalleryError(errLines.join('\n'));
+            this.log.warn('gallery-dl dosya üretmedi', { platform: job.platform, code, loggedIn: !!job._cookieFile, stdout: files.slice(0, 3), err: errLines.slice(-8) });
+            if (!job._engineRetried && errText && A.isEngineBreakage(errText)) {
+              job._engineRetried = true;
+              this._set(job, { phase: 'updating' });
+              await this.engine.update({ only: ['gallerydl'], reason: 'indirme hatası sonrası' });
+              cleanup();
+              if (job._canceled) return resolve();
+              return this._runGallery(job).then(resolve, reject);
+            }
+            // Yedek: gallery-dl'in bulduğu adreslerden doğrudan indir.
+            existing = await this._directGallery(job, staging);
+            if (job._canceled) {
+              cleanup();
+              return resolve();
+            }
+            if (existing.length === 0) {
+              const base = errText ? A.friendlyError(errText) : 'Görsel indirilemedi.';
+              const needLogin = !job._cookieFile && ['instagram', 'tiktok', 'x'].includes(job.platform) && !/giriş/i.test(base);
+              throw new Error(needLogin ? `${base} Bu platform çoğu zaman giriş ister: Ayarlar > Hesaplar.` : base);
+            }
+          }
           this._set(job, { phase: 'finishing', progress: 96 });
           const result = await this._finishGallery(job, existing, outDir);
+          cleanup();
           if (job._canceled) return resolve();
           const note = total && result.files.length < total ? `${total} dosyadan ${result.files.length} tanesi indirilebildi.` : null;
           this._set(job, {
@@ -835,24 +1016,148 @@ class Downloader extends EventEmitter {
           this.log.info('Görsel işi bitti:', job.platform, result.files.length, 'dosya');
           resolve();
         } catch (e) {
+          cleanup();
           reject(e);
         }
       });
     });
   }
 
-  // Görselleri okunur adlara çevirir; webp/avif -> PNG; videoları düzenleme uyumlu MP4 yapar.
+  // Seçili öğelerin adreslerini (önbellekten ya da yeniden listeleyerek) doğrudan indirir.
+  async _directGallery(job, staging) {
+    const entry = this._galleryCache.get(job.url);
+    let items = entry && entry.items;
+    if (!items) {
+      const raw = await this._galleryRaw(job.url, { platform: job.platform }, job._cookieFile).catch(() => null);
+      items = raw && raw.parsed.items;
+    }
+    if (!items || !items.length) return [];
+    const sel = job.selection && job.selection.length ? job.selection : items.map((i) => i.index);
+    const wanted = items.filter((i) => sel.includes(i.index) && /^https?:/i.test(i.url));
+    this.log.info('Doğrudan indirme yedeği:', { platform: job.platform, adet: wanted.length });
+    const out = [];
+    let done = 0;
+    for (const it of wanted) {
+      if (job._canceled) break;
+      try {
+        out.push(await this._fetchToFile(it.url, staging, `direct-${String(it.index).padStart(3, '0')}`, job.platform, it.ext));
+      } catch (e) {
+        this.log.warn('Doğrudan indirme başarısız:', job.platform, e.message);
+      }
+      done++;
+      this._set(job, { progress: Math.min(95, Math.round((done / wanted.length) * 95)) }, false);
+    }
+    return out;
+  }
+
+  async _fetchToFile(url, dir, stem, platform, extHint) {
+    if (typeof fetch !== 'function') throw new Error('fetch yok');
+    const r = await fetch(url, {
+      signal: AbortSignal.timeout(90000),
+      headers: { 'User-Agent': UA, Accept: 'image/avif,image/webp,image/*,video/*,*/*;q=0.8', ...(ORIGINS[platform] ? { Referer: ORIGINS[platform] } : {}) }
+    });
+    if (!r.ok || !r.body) throw new Error(`HTTP ${r.status}`);
+    const type = (r.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (/^text\//.test(type) || type === 'application/json') throw new Error('görsel yerine metin döndü');
+    const ext = MIME_EXT[type] || String(extHint || '').replace('.', '') || 'jpg';
+    const dest = path.join(dir, `${stem}.${ext}`);
+    await pipeline(Readable.fromWeb(r.body), fs.createWriteStream(dest));
+    if (fs.statSync(dest).size < 100) {
+      fs.rmSync(dest, { force: true });
+      throw new Error('boş dosya');
+    }
+    return dest;
+  }
+
+  // YouTube kapak resmi: en yüksek çözünürlüklü sürüm denenir, yoksa bir alt kademeye inilir.
+  async _runThumb(job) {
+    const id = P.youtubeVideoId(job.url);
+    if (!id) throw new Error('YouTube video kimliği bulunamadı.');
+    const outDir = this._outDir(job);
+    this._set(job, { status: 'downloading', phase: 'downloading', progress: 10 });
+    let buf = null;
+    for (const name of ['maxresdefault.jpg', 'sddefault.jpg', 'hqdefault.jpg']) {
+      if (job._canceled) return;
+      try {
+        const r = await fetch(`https://i.ytimg.com/vi/${id}/${name}`, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': UA } });
+        if (!r.ok) continue;
+        const b = Buffer.from(await r.arrayBuffer());
+        if (b.length > 2000 && b[0] === 0xff && b[1] === 0xd8) {
+          buf = b;
+          break;
+        }
+      } catch (e) {
+        this.log.warn('Kapak denemesi başarısız:', name, e.message);
+      }
+    }
+    if (!buf) throw new Error('Kapak resmi indirilemedi. İnternet bağlantını kontrol edip tekrar dene.');
+    const target = this._uniquePath(outDir, A.sanitizeName(`YouTube - ${job.title} - kapak`, 120) + '.jpg');
+    fs.writeFileSync(target, buf);
+    const size = jpegSize(buf);
+    this._set(job, {
+      status: 'done',
+      phase: 'done',
+      progress: 100,
+      filePath: target,
+      info: size ? `JPG · ${size.w}×${size.h}` : 'JPG',
+      editorReady: null,
+      thumbnail: buf.length < 150 * 1024 ? `data:image/jpeg;base64,${buf.toString('base64')}` : job.thumbnail
+    });
+    this.log.info('Kapak indirildi:', target, size || '');
+  }
+
+  // Uzaktaki kapak adresini ana süreçte indirip gömülü veriye çevirir (adres süresi dolsa ya da
+  // site dışarıdan erişimi engellese de kapak görünür).
+  async _inlineThumb(job) {
+    const src = job.thumbnail;
+    if (!src || !/^https?:/i.test(src) || typeof fetch !== 'function') return;
+    try {
+      const r = await fetch(src, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': UA, ...(ORIGINS[job.platform] ? { Referer: ORIGINS[job.platform] } : {}) } });
+      if (!r.ok) return;
+      const type = (r.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+      if (!/^image\/(jpeg|png|webp|gif)$/.test(type)) return;
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (buf.length < 200 || buf.length > 150 * 1024) return;
+      if (job.thumbnail !== src || !this.jobs.has(job.id)) return;
+      this._set(job, { thumbnail: `data:${type};base64,${buf.toString('base64')}` });
+    } catch (e) {
+      this.log.warn('Kapak alınamadı:', job.platform, e.message);
+    }
+  }
+
+  // Videodan küçük bir kare çıkarır (data URL); olmazsa null.
+  async _frameThumb(file) {
+    if (!this.engine.ffmpegExists()) return null;
+    const tmp = path.join(this.tmpDir, `thumb-${crypto.randomUUID().slice(0, 8)}.jpg`);
+    try {
+      fs.mkdirSync(this.tmpDir, { recursive: true });
+      for (const ss of ['1', '0']) {
+        const r = await runCapture(this.engine.ffmpegPath(), ['-hide_banner', '-loglevel', 'error', '-y', '-ss', ss, '-i', file, '-frames:v', '1', '-vf', 'scale=320:-2', '-q:v', '5', tmp], { timeout: 30000 }).catch(() => ({ code: 1 }));
+        if (r.code === 0 && fs.existsSync(tmp) && fs.statSync(tmp).size > 500) return 'data:image/jpeg;base64,' + fs.readFileSync(tmp).toString('base64');
+      }
+    } catch (_) { /* yok say */ } finally {
+      try { fs.unlinkSync(tmp); } catch (_) { /* yok say */ }
+    }
+    return null;
+  }
+
   async _finishGallery(job, files, outDir) {
     const label = P.PLATFORM_LABELS[job.platform] || 'Görsel';
     const names = A.galleryFileNames(files, job.selection, label, job.title);
     const renamed = [];
     files.forEach((f, i) => {
-      const target = this._uniquePath(path.dirname(f), names[i]);
+      let target = this._uniquePath(outDir, names[i]);
       try {
-        fs.renameSync(f, target);
+        moveFile(f, target);
         renamed.push(target);
       } catch {
-        renamed.push(f); // yeniden adlandırılamazsa özgün ad kalır
+        try {
+          target = this._uniquePath(outDir, path.basename(f));
+          moveFile(f, target); // özgün adla taşı
+          renamed.push(target);
+        } catch {
+          renamed.push(f);
+        }
       }
     });
 

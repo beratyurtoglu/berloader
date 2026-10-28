@@ -48,6 +48,11 @@ npm start
 4. Her satırda platform rozeti ve "YouTube'dan indiriliyor %43" gibi durum görünür.
 5. Oynatma listesi bağlantısında "tamamını indir?" sorulur; **Hayır** hiçbir şey indirmez. Listeden alınan tek video bağlantısı yalnızca o videoyu indirir.
 
+### Kuyruk ve liste temizliği (v1.2)
+- İndirmeler **sırayla** yapılır: biri bitmeden sıradaki başlamaz. İstersen Ayarlar → "Aynı anda indirilecek sayısı" ile artırabilirsin.
+- Biten işler **24 saat sonra** listeden otomatik kalkar (indirilen dosyalar silinmez). Ayarlar'dan kapatılabilir.
+- **YouTube kapak resmi:** platform YouTube iken biçim olarak "Görsel (kapak resmi)" seç; en yüksek çözünürlüklü JPG iner.
+
 ### Instagram / X / TikTok girişi
 Bu platformlar çoğu içerik için giriş ister: **Ayarlar → Hesaplar → Giriş yap**. Açılan pencereye normal giriş yaparsın; şifre saklanmaz, yalnızca oturum çerezi bu bilgisayarda tutulur. (YouTube için giriş sunulmaz; Google gömülü girişi engeller. Gerekirse Ayarlar → Gelişmiş çerez.)
 

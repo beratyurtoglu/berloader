@@ -78,6 +78,25 @@ function cleanYoutubeVideoUrl(u) {
   return `https://www.youtube.com${u.pathname}`;
 }
 
+// YouTube bağlantısından 11 karakterlik video kimliğini çıkarır; bulunamazsa null.
+function youtubeVideoId(url) {
+  let u;
+  try {
+    u = typeof url === 'string' ? new URL(url) : url;
+  } catch {
+    return null;
+  }
+  const host = u.hostname.toLowerCase();
+  let id = null;
+  if (host === 'youtu.be') id = u.pathname.slice(1).split('/')[0];
+  else if (u.pathname === '/watch') id = u.searchParams.get('v');
+  else {
+    const m = u.pathname.match(/^\/(?:shorts|live|embed|v)\/([^/?#]+)/);
+    if (m) id = m[1];
+  }
+  return id && /^[\w-]{6,20}$/.test(id) ? id : null;
+}
+
 // Seçili platform ile bağlantının platformu uyuşuyor mu? Uyuşmuyorsa Türkçe hata metni döner.
 function checkPlatformMatch(selected, detected) {
   if (!selected) return 'Önce indirme yapacağın platformu seç.';
@@ -93,6 +112,7 @@ module.exports = {
   detect,
   youtubeKind,
   cleanYoutubeVideoUrl,
+  youtubeVideoId,
   checkPlatformMatch,
   PLATFORM_LABELS,
   PLATFORM_FROM,

@@ -159,7 +159,7 @@ function diagnosticsText() {
     `Windows: ${os.release()} ${os.arch()} · Electron ${process.versions.electron} · Node ${process.versions.node}`,
     `Motorlar: yt-dlp ${st.ytdlp || '-'}${st.ytdlpChannel === 'nightly' ? ' (nightly)' : ''} · gallery-dl ${st.gallerydl || '-'} · deno ${st.deno || '-'} · ffmpeg ${st.ffmpeg}`,
     `ffmpeg ayrıntı: ${JSON.stringify(engine.ffmpegInfo)}`,
-    `Ayarlar: biçim=${s.format} kalite=${s.quality} uyumluluk=${s.editorCompat} eşzamanlı=${s.concurrent} çerezTarayıcı=${s.cookiesBrowser} çerezDosyası=${s.cookiesFile ? 'var' : 'yok'}`,
+    `Ayarlar: biçim=${s.format} kalite=${s.quality} uyumluluk=${s.editorCompat} eşzamanlı=${s.concurrent} otoTemizlik=${s.autoClearDone} çerezTarayıcı=${s.cookiesBrowser} çerezDosyası=${s.cookiesFile ? 'var' : 'yok'}`,
     '',
     'Son hatalı işler:',
     ...(failed.length ? failed : ['- yok']),
@@ -182,6 +182,7 @@ function registerIpc() {
     const before = settings.data.engineChannel;
     const all = settings.patch(partial || {});
     downloader._pump(); // eşzamanlı sayı değişmiş olabilir
+    downloader.purgeOld(); // otomatik temizlik ayarı açılmış olabilir
     if (before !== settings.data.engineChannel) engine.update({ only: ['ytdlp'], reason: 'kanal değişti' });
     return all;
   });
@@ -305,6 +306,7 @@ app.whenReady().then(() => {
   engine.on('status', (s) => send('engine:status', s));
   downloader.on('job', (j) => send('jobs:update', j));
   downloader.on('removed', (id) => send('jobs:removed', id));
+  downloader.startAutoClean(); // 24 saatten eski biten işleri periyodik kaldırır
 
   registerIpc();
   createWindow();

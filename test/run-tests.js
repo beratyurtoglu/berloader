@@ -3,13 +3,15 @@
 const assert = require('assert');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'berloader-test-'));
 const Module = require('module');
 
 // accounts.js ve engine.js 'electron' ister; testte yerine küçük bir taklit konur.
 const origLoad = Module._load;
 Module._load = function (req, ...rest) {
   if (req === 'electron') {
-    return { app: { getPath: () => os.tmpdir(), getName: () => 'BerLoader' }, net: {}, session: {}, BrowserWindow: class {} };
+    return { app: { getPath: () => TMP, getName: () => 'BerLoader' }, net: {}, session: {}, BrowserWindow: class {} };
   }
   return origLoad.call(this, req, ...rest);
 };
@@ -18,6 +20,7 @@ const P = require('../src/platform');
 const A = require('../src/args');
 const { toNetscape, domainMatches, browserUserAgent } = require('../src/accounts');
 const { parseEncoders } = require('../src/engine');
+const { Settings } = require('../src/store');
 
 let passed = 0;
 function t(name, fn) {
@@ -86,6 +89,28 @@ t('cleanYoutubeVideoUrl: liste parametrelerini atar', () => {
     'https://www.youtube.com/watch?v=AAA'
   );
   assert.strictEqual(P.cleanYoutubeVideoUrl(new URL('https://youtu.be/AAA?list=PLx')), 'https://youtu.be/AAA');
+});
+
+t('youtubeVideoId: kapak indirme için kimlik çıkarır', () => {
+  const id = (s) => P.youtubeVideoId(s);
+  assert.strictEqual(id('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLx'), 'dQw4w9WgXcQ');
+  assert.strictEqual(id('https://youtu.be/dQw4w9WgXcQ?si=abc'), 'dQw4w9WgXcQ');
+  assert.strictEqual(id('https://www.youtube.com/shorts/dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
+  assert.strictEqual(id('https://www.youtube.com/playlist?list=PLx'), null);
+  assert.strictEqual(id('bozuk'), null);
+});
+
+t('Settings: varsayılan sıralı indirme; eski kurulumdaki "2" ayarı 1e çevrilir', () => {
+  fs.writeFileSync(path.join(TMP, 'settings.json'), JSON.stringify({ concurrent: 2, format: 'mp3' }));
+  const s = new Settings();
+  assert.strictEqual(s.data.concurrent, 1);
+  assert.strictEqual(s.data.format, 'mp3'); // diğer ayarlar korunur
+  assert.strictEqual(s.data.autoClearDone, true);
+  s.patch({ concurrent: 3 }); // kullanıcı bilerek değiştirirse saygı duyulur
+  assert.strictEqual(s.data.concurrent, 3);
+  s.patch({ settingsVersion: 1 });
+  assert.strictEqual(s.data.settingsVersion, 2); // sürüm alanı dışarıdan değiştirilemez
+  fs.rmSync(path.join(TMP, 'settings.json'), { force: true });
 });
 
 // ---- args ----

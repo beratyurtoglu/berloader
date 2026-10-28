@@ -7,7 +7,7 @@
   // "…'dan/den indiriliyor" (Türkçe ünlü uyumuna göre)
   const FROM = { youtube: "YouTube'dan", instagram: "Instagram'dan", tiktok: "TikTok'tan", x: "X'ten", pinterest: "Pinterest'ten", other: 'Web üzerinden' };
   const PLAT_INFO = {
-    youtube: 'Video, Shorts ve oynatma listeleri. MP4 ya da ses olarak indirilir.',
+    youtube: 'Video, Shorts ve oynatma listeleri. MP4 ya da ses olarak indirilir; "Görsel" seçersen kapak resmini indirir.',
     instagram: 'Reels, video ve fotoğraf gönderileri. Çoklu gönderide istediklerini seçersin.',
     tiktok: 'Video ve fotoğraf gönderileri. Çoklu gönderide istediklerini seçersin.',
     x: 'Video ve görselli gönderiler. Çoklu görselde istediklerini seçersin.',
@@ -116,6 +116,7 @@
     $('#setByPlatform').checked = !!settings.organizeByPlatform;
     $('#setConcurrent').value = String(settings.concurrent);
     $('#setCompat').checked = !!settings.editorCompat;
+    $('#setAutoClear').checked = !!settings.autoClearDone;
     $('#setCookies').value = settings.cookiesBrowser;
     $('#setCookieFile').value = settings.cookiesFile || '';
     $('#setChannel').value = settings.engineChannel;
@@ -136,8 +137,6 @@
     for (const b of document.querySelectorAll('.plat')) b.setAttribute('aria-pressed', String(b.dataset.platform === p));
     $('#platforms').classList.remove('needs-pick');
     setHint('');
-    // Seçili platform YouTube ise "Görsel" biçimi geçersiz.
-    if (p === 'youtube' && settings.format === 'image') save({ format: 'mp4' });
     renderPlatformHint();
     refreshOptions();
     $('#urlInput').focus();
@@ -167,9 +166,8 @@
   function refreshOptions() {
     const fmt = $('#formatSelect');
     const imgOpt = fmt.querySelector('option[value="image"]');
-    const noImages = platform === 'youtube';
-    imgOpt.disabled = noImages;
-    imgOpt.textContent = noImages ? 'Görsel (YouTube\'da yok)' : 'Görsel';
+    imgOpt.disabled = false;
+    imgOpt.textContent = platform === 'youtube' ? 'Görsel (kapak resmi)' : 'Görsel';
     fmt.value = settings.format;
     $('#qualitySelect').classList.toggle('hidden', settings.format !== 'mp4');
   }
@@ -421,6 +419,7 @@
 
   function formatLabel(j) {
     if (j.route === 'gallery') return 'Görsel';
+    if (j.route === 'thumb') return 'Kapak görseli';
     if (j.format === 'mp4') return 'MP4 · ' + (QUALITY[j.quality] || j.quality);
     return j.format.toUpperCase();
   }
@@ -445,6 +444,7 @@
     const refs = rows.get(j.id)._refs;
     refs.el.className = 'job ' + j.status;
     refs.el.dataset.platform = j.platform;
+    setThumb(refs.thumb, j);
     refs.badge.textContent = LABEL[j.platform] || 'Web';
     refs.title.textContent = j.title || j.url;
     refs.title.title = j.title || j.url;
@@ -455,7 +455,7 @@
       const count = j.route === 'gallery' && j.itemCount ? `${j.itemCount} dosya` : null;
       setMeta(refs.meta, [
         { t: 'Tamamlandı', cls: 'good' },
-        j.route === 'gallery' ? count : j.format === 'mp4' ? 'MP4' : j.format.toUpperCase(),
+        j.route === 'gallery' ? count : j.route === 'thumb' ? 'Kapak görseli' : j.format === 'mp4' ? 'MP4' : j.format.toUpperCase(),
         j.info,
         j.editorReady === true ? { t: 'Adobe/CapCut uyumlu ✓', cls: 'good' } : null,
         j.editorReady === false ? { t: 'Düzenleme uyumu doğrulanamadı', cls: 'warn' } : null,
@@ -486,19 +486,27 @@
     updateCount();
   }
 
+  // Kapak küçük resmi; adres açılmazsa platformun baş harfi gösterilir.
+  function setThumb(thumb, j) {
+    if (thumb.dataset.src === (j.thumbnail || '')) return;
+    thumb.dataset.src = j.thumbnail || '';
+    thumb.textContent = '';
+    const initial = (LABEL[j.platform] || 'W')[0];
+    if (!j.thumbnail) {
+      thumb.textContent = initial;
+      return;
+    }
+    const img = h('img', { src: j.thumbnail, referrerpolicy: 'no-referrer', alt: '' });
+    img.addEventListener('error', () => {
+      img.remove();
+      thumb.textContent = initial;
+    });
+    thumb.append(img);
+  }
+
   function buildRow(j) {
     const thumb = h('div', { class: 'thumb' });
-    const initial = (LABEL[j.platform] || 'W')[0];
-    if (j.thumbnail) {
-      const img = h('img', { src: j.thumbnail, referrerpolicy: 'no-referrer', alt: '' });
-      img.addEventListener('error', () => {
-        img.remove();
-        thumb.textContent = initial;
-      });
-      thumb.append(img);
-    } else {
-      thumb.textContent = initial;
-    }
+    setThumb(thumb, j);
     const badge = h('span', { class: 'badge' });
     const title = h('span', { class: 'job-title' });
     const meta = h('div', { class: 'job-meta' });
@@ -506,7 +514,7 @@
     const bar = h('div', { class: 'bar' }, fill);
     const actions = h('div', { class: 'job-actions' });
     const el = h('div', { class: 'job' }, thumb, h('div', { class: 'job-main' }, h('div', { class: 'job-top' }, badge, title), meta, bar), actions);
-    return { el, badge, title, meta, bar, fill, actions };
+    return { el, thumb, badge, title, meta, bar, fill, actions };
   }
 
   function renderAll() {
@@ -638,6 +646,7 @@
   $('#setByPlatform').addEventListener('change', (e) => save({ organizeByPlatform: e.target.checked }));
   $('#setConcurrent').addEventListener('change', (e) => save({ concurrent: Number(e.target.value) }));
   $('#setCompat').addEventListener('change', (e) => save({ editorCompat: e.target.checked }));
+  $('#setAutoClear').addEventListener('change', (e) => save({ autoClearDone: e.target.checked }));
   $('#setCookies').addEventListener('change', (e) => save({ cookiesBrowser: e.target.value }));
   $('#setCookieFileBtn').addEventListener('click', async () => {
     const f = await api.chooseCookieFile();
