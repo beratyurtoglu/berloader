@@ -25,6 +25,10 @@ jobs:
           if [ "$TAG" != "$VER" ]; then
             echo "Etiket ($TAG) ile package.json sürümü ($VER) farklı"; exit 1
           fi
+      - name: Güncelleme deposunu bu depodan al (package.json'daki değerden bağımsız)
+        shell: bash
+        run: |
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));const [o,r]=process.env.GITHUB_REPOSITORY.split('/');p.build.publish=[{provider:'github',owner:o,repo:r,releaseType:'release'}];fs.writeFileSync('package.json',JSON.stringify(p,null,2));console.log('publish =',JSON.stringify(p.build.publish));"
       - run: npm ci
       - run: npm test
       - name: Kurulum dosyasını derle (yayınlamadan)
