@@ -1,7 +1,7 @@
 {
   "name": "berloader",
   "productName": "BerLoader",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "BerLoader - YouTube, Instagram, TikTok, X ve Pinterest indirici",
   "main": "main.js",
   "author": "Berat Yurtoğlu",
