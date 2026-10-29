@@ -59,7 +59,9 @@ function ytdlpFormatArgs(job) {
 function buildYtdlpArgs(job, ctx) {
   const { settings, ffmpegPath, denoPath, outDir, cookieFile } = ctx;
   const prefix = job.prefix ? sanitizeName(job.prefix, 12) + ' - ' : '';
-  const template = path.join(outDir, `${prefix}%(title).100s [%(id)s].%(ext)s`);
+  // Bölüm indirmede ad farklı olmalı; yoksa daha önce inen tam video "zaten indirilmiş" sayılır.
+  const tag = job.section ? ` (${sectionTag(job.section)})` : '';
+  const template = path.join(outDir, `${prefix}%(title).100s [%(id)s]${tag}.%(ext)s`);
   const args = [
     '--ignore-config',
     '--no-colors',
@@ -78,6 +80,11 @@ function buildYtdlpArgs(job, ctx) {
   if (settings.youtubeRemoteSolver) args.push('--remote-components', 'ejs:github');
   args.push(...cookieArgs(settings, cookieFile));
   args.push(...ytdlpFormatArgs(job));
+  if (job.section) {
+    const s = job.section;
+    args.push('--download-sections', `*${s.start || 0}-${s.end == null ? 'inf' : s.end}`);
+    if (job.format === 'mp4') args.push('--force-keyframes-at-cuts'); // kesim noktası tam istenen yerde olsun
+  }
   args.push('--progress', '--progress-template', PROGRESS_TEMPLATE);
   args.push('--print', 'after_move:BLFILE|%(filepath)s');
   // Windows'ta konsol çıktısı UTF-8 olmayabilir (Türkçe karakterli başlıklar bozulur); dosyaya UTF-8 yazılır.
@@ -99,6 +106,35 @@ function compressRanges(list) {
   return out.join(',');
 }
 
+// "1:30", "01:02:03", "90", "1:30.5" -> saniye. Boş metin -> null. Geçersiz -> NaN.
+function parseTimecode(text) {
+  const s = String(text == null ? '' : text).trim().replace(',', '.');
+  if (!s) return null;
+  if (!/^\d+(:\d{1,2}){0,2}(\.\d+)?$/.test(s)) return NaN;
+  const parts = s.split(':').map(Number);
+  if (parts.length > 1 && parts.slice(1).some((n) => n >= 60)) return NaN;
+  return parts.reduce((acc, n) => acc * 60 + n, 0);
+}
+
+// 90 -> "1:30", 3725 -> "1:02:05", 90.5 -> "1:30.5"
+function formatTimecode(sec) {
+  const total = Math.max(0, Number(sec) || 0);
+  const whole = Math.floor(total);
+  const frac = total - whole;
+  const h = Math.floor(whole / 3600);
+  const m = Math.floor((whole % 3600) / 60);
+  const s = whole % 60;
+  const sPart = String(s).padStart(2, '0') + (frac > 0.0005 ? String(Number(frac.toFixed(2))).slice(1) : '');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sPart}` : `${m}:${sPart}`;
+}
+
+// Dosya adında kullanılabilir bölüm etiketi: { start: 30, end: 105 } -> "0.30-1.45"
+function sectionTag(section) {
+  if (!section) return '';
+  const f = (n) => formatTimecode(n).replace(/:/g, '.');
+  return `${f(section.start || 0)}-${section.end == null ? 'son' : f(section.end)}`;
+}
+
 // ctx: { settings, outDir, cookieFile }
 function buildGalleryArgs(job, ctx) {
   const args = ['--config-ignore', '-D', ctx.outDir, '--http-timeout', '30', '-R', '4'];
@@ -117,6 +153,18 @@ function buildYtdlpInfoArgs(url, ctx, noPlaylist) {
   const { settings, denoPath, cookieFile } = ctx;
   const args = ['--ignore-config', '--no-colors', '--no-warnings', '-J', '--flat-playlist', '--socket-timeout', '30'];
   if (noPlaylist) args.push('--no-playlist');
+  if (denoPath) args.push('--js-runtimes', `deno:${denoPath}`);
+  if (settings.youtubeRemoteSolver) args.push('--remote-components', 'ejs:github');
+  args.push(...cookieArgs(settings, cookieFile));
+  args.push('--', url);
+  return args;
+}
+
+// Kırpma önizlemesi için küçük (en fazla 480p), ses+görüntü içeren tek akış adresi.
+function buildYtdlpPreviewArgs(url, ctx) {
+  const { settings, denoPath, cookieFile } = ctx;
+  const args = ['--ignore-config', '--no-colors', '--no-warnings', '--no-playlist', '--socket-timeout', '20', '-g'];
+  args.push('-f', '18/best[height<=480][vcodec!=none][acodec!=none]/best[height<=480][vcodec!=none]');
   if (denoPath) args.push('--js-runtimes', `deno:${denoPath}`);
   if (settings.youtubeRemoteSolver) args.push('--remote-components', 'ejs:github');
   args.push(...cookieArgs(settings, cookieFile));
@@ -346,6 +394,9 @@ function isEngineBreakage(raw) {
 }
 
 module.exports = {
+  parseTimecode,
+  formatTimecode,
+  sectionTag,
   VIDEO_EXT,
   IMAGE_CONVERT_EXT,
   sanitizeName,
@@ -357,6 +408,7 @@ module.exports = {
   buildGalleryArgs,
   buildGalleryListArgs,
   buildYtdlpInfoArgs,
+  buildYtdlpPreviewArgs,
   parseProgressLine,
   parseAlreadyDownloaded,
   parseGalleryJson,

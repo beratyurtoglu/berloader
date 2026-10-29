@@ -220,6 +220,14 @@ function registerIpc() {
       return { ok: false, error: e.message };
     }
   });
+  ipcMain.handle('url:preview', async (_e, url) => {
+    try {
+      return await downloader.previewStream(url);
+    } catch (e) {
+      logger.warn('Önizleme alınamadı:', e.message);
+      return null;
+    }
+  });
   ipcMain.handle('jobs:enqueue', (_e, payload) => downloader.enqueue(payload));
   ipcMain.handle('jobs:list', () => downloader.list());
   ipcMain.handle('jobs:cancel', (_e, id) => downloader.cancel(id));

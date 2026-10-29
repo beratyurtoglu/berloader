@@ -270,6 +270,45 @@ t('friendlyError + isEngineBreakage', () => {
   assert.ok(!A.isEngineBreakage('ERROR: Private video'));
 });
 
+t('parseTimecode / formatTimecode / sectionTag', () => {
+  assert.strictEqual(A.parseTimecode('1:30'), 90);
+  assert.strictEqual(A.parseTimecode('01:02:03'), 3723);
+  assert.strictEqual(A.parseTimecode('90'), 90);
+  assert.strictEqual(A.parseTimecode('1:30,5'), 90.5);
+  assert.strictEqual(A.parseTimecode('  '), null);
+  assert.ok(Number.isNaN(A.parseTimecode('1:75')));
+  assert.ok(Number.isNaN(A.parseTimecode('abc')));
+  assert.ok(Number.isNaN(A.parseTimecode('-5')));
+  assert.strictEqual(A.formatTimecode(90), '1:30');
+  assert.strictEqual(A.formatTimecode(3725), '1:02:05');
+  assert.strictEqual(A.formatTimecode(90.5), '1:30.5');
+  assert.strictEqual(A.sectionTag({ start: 30, end: 105 }), '0.30-1.45');
+  assert.strictEqual(A.sectionTag({ start: 0, end: null }), '0.00-son');
+  assert.ok(!/[:<>"/\\|?*]/.test(A.sectionTag({ start: 3725, end: null })));
+});
+
+t('buildYtdlpArgs: bölüm indirme', () => {
+  const v = A.buildYtdlpArgs({ url: 'u', format: 'mp4', quality: 'best', section: { start: 30, end: 105 } }, base);
+  assert.strictEqual(v[v.indexOf('--download-sections') + 1], '*30-105');
+  assert.ok(v.includes('--force-keyframes-at-cuts'));
+  assert.ok(v[v.indexOf('-o') + 1].includes('[%(id)s] (0.30-1.45).%(ext)s'));
+  const open = A.buildYtdlpArgs({ url: 'u', format: 'mp3', quality: 'best', section: { start: 60, end: null } }, base);
+  assert.strictEqual(open[open.indexOf('--download-sections') + 1], '*60-inf');
+  assert.ok(!open.includes('--force-keyframes-at-cuts')); // ses için gerekmez
+  const none = A.buildYtdlpArgs({ url: 'u', format: 'mp4', quality: 'best' }, base);
+  assert.ok(!none.includes('--download-sections'));
+  assert.ok(none[none.indexOf('-o') + 1].endsWith('[%(id)s].%(ext)s'));
+});
+
+t('buildYtdlpPreviewArgs: küçük, ses+görüntülü tek akış', () => {
+  const a = A.buildYtdlpPreviewArgs('https://www.youtube.com/watch?v=abcdefghijk', base);
+  assert.ok(a.includes('-g') && a.includes('--no-playlist'));
+  assert.ok(a[a.indexOf('-f') + 1].startsWith('18/'));
+  assert.ok(a[a.indexOf('-f') + 1].includes('height<=480'));
+  assert.strictEqual(a[a.length - 1], 'https://www.youtube.com/watch?v=abcdefghijk');
+  assert.strictEqual(a[a.length - 2], '--');
+});
+
 t('sanitizeName', () => {
   assert.strictEqual(A.sanitizeName('a<b>:"c/d\\e|f?g*h%'), 'a_b___c_d_e_f_g_h_');
   assert.strictEqual(A.sanitizeName('  ... '), 'BerLoader');

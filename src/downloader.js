@@ -30,7 +30,7 @@ const NOLOG = { info() {}, warn() {}, error() {} };
 // (konsol kodlaması bozulsa da id ASCII'dir), olmazsa since'den sonra değişen en yeni medyayı alır.
 function findNewestOutput(dir, since, reported) {
   const media = new Set(['.mp3', '.m4a', '.wav', '.opus', '.aac', '.ogg', '.mp4', '.mkv', '.webm', '.mov', '.m4v']);
-  const idm = reported ? String(reported).match(/\[([^\[\]]+)\]\.[A-Za-z0-9]+$/) : null;
+  const idm = reported ? String(reported).match(/\[([^\[\]]+)\](?: \([^)]*\))?\.[A-Za-z0-9]+$/) : null;
   const id = idm ? `[${idm[1]}]` : null;
   let byId = null, byIdT = 0, byTime = null, byTimeT = 0;
   try {
@@ -105,6 +105,18 @@ function pickGalleryError(text) {
   const lines = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const hit = [...lines].reverse().find((l) => !/\[(info|debug)\]/i.test(l) && /\[error\]|error|exception|forbidden|unauthorized|not found|login|private|denied|failed|HTTP/i.test(l));
   return hit || '';
+}
+
+// Arayüzden gelen bölüm bilgisini doğrular: { start: sn, end: sn | null } ya da null.
+// Yalnızca YouTube'da ve ses/video biçimlerinde geçerlidir.
+function normalizeSection(sec, platform) {
+  if (!sec || platform !== 'youtube') return null;
+  const start = Number(sec.start) || 0;
+  const end = sec.end == null || sec.end === '' ? null : Number(sec.end);
+  if (!Number.isFinite(start) || start < 0) return null;
+  if (end !== null && (!Number.isFinite(end) || end <= start)) return null;
+  if (start === 0 && end === null) return null;
+  return { start, end };
 }
 
 function utf8Env() {
@@ -219,8 +231,17 @@ class Downloader extends EventEmitter {
     return [...this.jobs.values()].some((j) => RUNNING.includes(j.status));
   }
 
+  // Diske yazarken yalnızca en yeni 40 işin gömülü küçük resmi tutulur; böylece history.json şişmez
+  // ve her bitişte yeniden yazmak uygulamayı yavaşlatmaz.
   _persist() {
-    this.history.set([...this.jobs.values()].map((j) => this.publicJob(j)));
+    const list = [...this.jobs.values()].map((j) => this.publicJob(j));
+    const newest = new Set(
+      [...list].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 40).map((j) => j.id)
+    );
+    for (const j of list) {
+      if (!newest.has(j.id) && typeof j.thumbnail === 'string' && j.thumbnail.startsWith('data:')) j.thumbnail = null;
+    }
+    this.history.set(list);
   }
 
   _emit(job, force = false) {
@@ -262,8 +283,45 @@ class Downloader extends EventEmitter {
     return n;
   }
 
+  // Çöküş/kapanışta yarım kalan geçici dosya ve klasörleri (".berloader-*") temizler.
+  // Yalnızca indirme klasörünün kendisine ve bir alt düzeyine bakar; 6 saatten yeni olanlara dokunmaz.
+  sweepLeftovers() {
+    const root = this.settings.data.downloadDir;
+    if (!root) return 0;
+    const cutoff = Date.now() - 6 * 3600 * 1000;
+    const active = new Set([...this.jobs.values()].filter((j) => RUNNING.includes(j.status)).map((j) => j.id.slice(0, 8)));
+    let n = 0;
+    const scan = (dir, depth) => {
+      let names;
+      try {
+        names = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const d of names) {
+        const full = path.join(dir, d.name);
+        if (d.name.startsWith('.berloader-') || d.name.endsWith('.berloader-tmp.mp4')) {
+          if (active.has(d.name.slice(11, 19))) continue;
+          try {
+            if (fs.statSync(full).mtimeMs > cutoff) continue;
+            fs.rmSync(full, { recursive: true, force: true });
+            n++;
+          } catch {
+            /* yoksay */
+          }
+        } else if (d.isDirectory() && depth < 1 && !d.name.startsWith('.')) {
+          scan(full, depth + 1);
+        }
+      }
+    };
+    scan(root, 0);
+    if (n) this.log.info('Artık geçici dosyalar temizlendi:', n);
+    return n;
+  }
+
   startAutoClean() {
     this.purgeOld();
+    if (!this.hasActive()) setTimeout(() => this.sweepLeftovers(), 60 * 1000).unref();
     this._cleanTimer = setInterval(() => this.purgeOld(), 30 * 60 * 1000);
     if (this._cleanTimer.unref) this._cleanTimer.unref();
   }
@@ -382,6 +440,23 @@ class Downloader extends EventEmitter {
     }
   }
 
+  // Kırpma ekranı için küçük bir önizleme akışının adresi. Alınamazsa null (ekran yine çalışır).
+  async previewStream(rawUrl) {
+    const id = P.youtubeVideoId(String(rawUrl || ''));
+    if (!id) return null;
+    const url = `https://www.youtube.com/watch?v=${id}`;
+    this._previewCache = this._previewCache || new Map();
+    const hit = this._previewCache.get(url);
+    if (hit && Date.now() - hit.t < 20 * 60 * 1000) return hit.u;
+    const args = A.buildYtdlpPreviewArgs(url, this._ytCtx(null));
+    const { code, out } = await runCapture(this.engine.bin('ytdlp'), args, { timeout: 45000 });
+    const u = out.split(/\r?\n/).map((l) => l.trim()).find((l) => /^https:\/\//.test(l)) || null;
+    if (code !== 0 || !u) return null;
+    if (this._previewCache.size >= 10) this._previewCache.delete(this._previewCache.keys().next().value);
+    this._previewCache.set(url, { u, t: Date.now() });
+    return u;
+  }
+
   async _inspectYtdlp(rawUrl, p, cookieFile) {
     let url = rawUrl;
     let noPlaylist = false;
@@ -441,6 +516,7 @@ class Downloader extends EventEmitter {
       title: info.title || url,
       thumbnail: thumb || null,
       duration: info.duration || null,
+      videoId: p.platform === 'youtube' ? P.youtubeVideoId(url) : null,
       maxHeight: heights.length ? Math.max(...heights) : null
     };
   }
@@ -542,6 +618,8 @@ class Downloader extends EventEmitter {
         subdir: p.subdir || '',
         prefix: p.prefix || '',
         galleryFallback: !!p.galleryFallback,
+        section: normalizeSection(p.section, p.platform),
+        duration: Number(p.duration) > 0 ? Number(p.duration) : null,
         status: 'queued',
         phase: 'queued',
         progress: 0,

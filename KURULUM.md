@@ -51,6 +51,9 @@ npm start
 ### Kuyruk ve liste temizliği (v1.2)
 - İndirmeler **sırayla** yapılır: biri bitmeden sıradaki başlamaz. İstersen Ayarlar → "Aynı anda indirilecek sayısı" ile artırabilirsin.
 - Biten işler **24 saat sonra** listeden otomatik kalkar (indirilen dosyalar silinmez). Ayarlar'dan kapatılabilir.
+- **Videonun bir bölümünü indirme (YouTube, v1.3):** "Yalnızca bir bölümü indir" kutusunu işaretleyip İndir'e bas. Video önizlemesi açılır; alttaki şeritte sol ve sağ sürgüyü sürükleyerek başlangıç/bitişi seç (ortadaki alanı sürüklersen bölüm olduğu gibi kayar; ok tuşları 1 sn, Shift+ok 10 sn; − / + düğmeleri ince ayar). "Seçimi oynat" ile seçtiğin parçayı izleyebilirsin. Önizleme açılmazsa sürgüler yine çalışır. Dosya adına bölüm eklenir (ör. `(0.30-1.45)`); tam video varsa üzerine yazılmaz. Oynatma listelerinde çalışmaz.
+- **Kuyruktan başka bölüm:** Biten YouTube video/ses işlerinde "Başka bölüm seç" düğmesi çıkar; aynı videodan yeni bir parça seçip indirirsin (uygulamayı kapatıp açsan da çalışır).
+- **Bakım (v1.3):** `history.json` küçük kalır (yalnızca son 40 işin kapak resmi saklanır); çökme/kapanıştan kalan `.berloader-*` geçici dosyalar açılışta temizlenir (6 saatten eskiler).
 - **YouTube kapak resmi:** platform YouTube iken biçim olarak "Görsel (kapak resmi)" seç; en yüksek çözünürlüklü JPG iner.
 
 ### Instagram / X / TikTok girişi

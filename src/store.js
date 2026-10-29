@@ -28,6 +28,7 @@ class JsonFile {
     this.file = path.join(app.getPath('userData'), name);
     this.data = JSON.parse(JSON.stringify(defaults));
     this._timer = null;
+    this.pretty = true;
     this._load();
   }
   _load() {
@@ -45,7 +46,7 @@ class JsonFile {
       try {
         fs.mkdirSync(path.dirname(this.file), { recursive: true });
         const tmp = this.file + '.tmp';
-        fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2), 'utf8');
+        fs.writeFileSync(tmp, this.pretty ? JSON.stringify(this.data, null, 2) : JSON.stringify(this.data), 'utf8');
         fs.renameSync(tmp, this.file);
       } catch (e) {
         console.error('Kaydedilemedi:', this.file, e.message);
@@ -87,6 +88,7 @@ class Settings extends JsonFile {
 class History extends JsonFile {
   constructor() {
     super('history.json', []);
+    this.pretty = false; // küçük resimler (data:) içerdiği için sıkıştırılmış yazılır
   }
   list() {
     return this.data;

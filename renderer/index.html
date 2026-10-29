@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' data: https:; style-src 'self'; script-src 'self'; connect-src 'none'; object-src 'none'">
+        content="default-src 'self'; img-src 'self' data: https:; media-src https:; style-src 'self'; script-src 'self'; connect-src 'none'; object-src 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BerLoader</title>
   <link rel="stylesheet" href="style.css">
@@ -57,6 +57,13 @@
         <span id="hint" class="hint grow"></span>
         <button id="downloadBtn" class="primary" type="button">İndir</button>
       </div>
+      <div id="sectionRow" class="row options hidden">
+        <label class="check inline-check">
+          <input id="sectionToggle" type="checkbox">
+          <span>Yalnızca bir bölümü indir</span>
+        </label>
+        <span class="hint grow">İndir'e basınca video önizlemesi açılır; sürgülerle bölümü seçersin.</span>
+      </div>
     </section>
 
     <section class="list-head">
@@ -81,6 +88,51 @@
       <button id="openFolder" class="link" type="button">Klasörü aç</button>
     </div>
   </footer>
+
+  <!-- Bölüm seçme (önizleme + sürgüler) -->
+  <div id="trimModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="trimHeading">
+    <div class="modal-box trim">
+      <div class="modal-head">
+        <h3 id="trimHeading">Bölümü seç</h3>
+        <span id="trimTitle" class="muted trim-name"></span>
+      </div>
+      <div class="trim-stage">
+        <video id="trimVideo" class="hidden" playsinline preload="none"></video>
+        <img id="trimPoster" alt="" referrerpolicy="no-referrer">
+        <div id="trimMsg" class="trim-msg"></div>
+      </div>
+      <div id="trimTrack" class="trim-track">
+        <div id="trimStrip" class="trim-strip"></div>
+        <div id="trimDimL" class="trim-dim left"></div>
+        <div id="trimDimR" class="trim-dim right"></div>
+        <div id="trimSel" class="trim-sel" title="Bölümü olduğu gibi kaydırmak için sürükle"></div>
+        <button id="trimHandleL" class="trim-handle" type="button" role="slider" aria-label="Başlangıç" aria-valuemin="0"></button>
+        <button id="trimHandleR" class="trim-handle" type="button" role="slider" aria-label="Bitiş" aria-valuemin="0"></button>
+      </div>
+      <div class="trim-readout">
+        <div class="trim-time">
+          <span class="muted">Başlangıç</span>
+          <button id="trimStartMinus" class="step" type="button" aria-label="Başlangıç 1 sn geri">−</button>
+          <strong id="trimStart">0:00</strong>
+          <button id="trimStartPlus" class="step" type="button" aria-label="Başlangıç 1 sn ileri">+</button>
+        </div>
+        <div class="trim-len"><span class="muted">Süre</span> <strong id="trimLen">0:00</strong></div>
+        <div class="trim-time">
+          <span class="muted">Bitiş</span>
+          <button id="trimEndMinus" class="step" type="button" aria-label="Bitiş 1 sn geri">−</button>
+          <strong id="trimEnd">0:00</strong>
+          <button id="trimEndPlus" class="step" type="button" aria-label="Bitiş 1 sn ileri">+</button>
+        </div>
+      </div>
+      <p class="hint">Sürgüleri sürükle (ok tuşları 1 sn, Shift ile 10 sn). Ortadaki alanı sürüklersen bölüm olduğu gibi kayar.</p>
+      <div class="modal-actions">
+        <button id="trimPlay" class="secondary" type="button" disabled>▶ Seçimi oynat</button>
+        <span class="grow"></span>
+        <button id="trimCancel" class="secondary" type="button">Vazgeç</button>
+        <button id="trimOk" class="primary" type="button">Bu bölümü indir</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Oynatma listesi onayı -->
   <div id="playlistModal" class="modal hidden" role="dialog" aria-modal="true">
@@ -231,6 +283,7 @@
     </div>
   </div>
 
+  <script src="trim.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

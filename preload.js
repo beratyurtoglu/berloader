@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('berloader', {
   openDownloadFolder: () => ipcRenderer.invoke('folder:open'),
 
   analyze: (payload) => ipcRenderer.invoke('url:analyze', payload),
+  previewUrl: (url) => ipcRenderer.invoke('url:preview', url),
   enqueue: (payload) => ipcRenderer.invoke('jobs:enqueue', payload),
   listJobs: () => ipcRenderer.invoke('jobs:list'),
   cancelJob: (id) => ipcRenderer.invoke('jobs:cancel', id),

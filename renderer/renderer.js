@@ -170,6 +170,8 @@
     imgOpt.textContent = platform === 'youtube' ? 'Görsel (kapak resmi)' : 'Görsel';
     fmt.value = settings.format;
     $('#qualitySelect').classList.toggle('hidden', settings.format !== 'mp4');
+    // Bölüm indirme: YouTube'da video/ses biçimlerinde.
+    $('#sectionRow').classList.toggle('hidden', !(platform === 'youtube' && settings.format !== 'image'));
   }
 
   function flashPlatforms() {
@@ -224,6 +226,20 @@
     }
   }
 
+  // ---------- Bölüm (başlangıç/bitiş) ----------
+  // Bölüm kutusu işaretliyse İndir'e basınca önizleme + sürgü ekranı açılır.
+  function wantsSection() {
+    return $('#sectionToggle').checked && !$('#sectionRow').classList.contains('hidden');
+  }
+
+  function fmtClock(sec) {
+    const t = Math.round(sec);
+    const hh = Math.floor(t / 3600);
+    const mm = Math.floor((t % 3600) / 60);
+    const ss = t % 60;
+    return hh ? `${hh}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}` : `${mm}:${String(ss).padStart(2, '0')}`;
+  }
+
   // ---------- İndirme akışı ----------
   async function start() {
     if (busy) return;
@@ -243,6 +259,7 @@
       flashPlatforms();
       return;
     }
+    const wantSec = wantsSection();
     setBusy(true);
     let res;
     try {
@@ -257,6 +274,24 @@
     setHint('');
     const r = res.result;
     const common = { format: settings.format, quality: settings.quality };
+    if (wantSec && r.kind === 'playlist') {
+      setHint('Bölüm seçimi yalnızca tek video için çalışır. Bölüm kutusunu kapat ya da tek bir video bağlantısı yapıştır.', 'error');
+      return;
+    }
+    if (wantSec && r.kind === 'video') {
+      if (!r.duration) {
+        setHint('Bu videonun süresi öğrenilemedi (canlı yayın olabilir); bölüm seçilemiyor.', 'error');
+        return;
+      }
+      setHint('Önizleme açılıyor…');
+      const picked = await window.BerTrim.open({ title: r.title, url: r.url, videoId: r.videoId, duration: r.duration });
+      if (!picked) {
+        setHint('Bölüm seçilmedi; indirme başlatılmadı.');
+        return;
+      }
+      common.section = picked;
+      common.duration = r.duration;
+    }
 
     if (r.kind === 'playlist') {
       if (!(await askPlaylist(r))) {
@@ -303,7 +338,8 @@
         platform: r.platform,
         title: r.title,
         thumbnail: r.thumbnail,
-        galleryFallback: r.galleryFallback
+        galleryFallback: r.galleryFallback,
+        duration: r.duration || null
       });
       if (settings.format === 'mp4' && r.maxHeight && settings.quality !== 'best' && Number(settings.quality) > r.maxHeight) {
         setHint(`Bu video en fazla ${r.maxHeight}p; o kalitede indirilecek.`, 'ok');
@@ -312,6 +348,10 @@
       }
     }
     $('#urlInput').value = '';
+    if ($('#sectionToggle').checked) {
+      // Bir sonraki videoya yanlışlıkla uygulanmasın.
+      $('#sectionToggle').checked = false;
+    }
     $('#urlInput').focus();
   }
 
@@ -401,7 +441,7 @@
         if (j.phase === 'updating') return 'İndirme motoru güncelleniyor, ardından yeniden denenecek…';
         if (j.phase === 'merging') return 'Video ve ses birleştiriliyor…';
         if (j.phase === 'finishing') return 'Dosyalar düzenleniyor…';
-        const parts = [`${from} indiriliyor %${j.progress || 0}`];
+        const parts = [j.section && !j.progress ? `${from} seçilen bölüm indiriliyor…` : `${from} indiriliyor %${j.progress || 0}`];
         if (j.speed) parts.push(fmtSpeed(j.speed));
         if (j.eta != null && j.eta !== 0) parts.push('kalan ' + fmtEta(j.eta));
         return parts.join(' · ');
@@ -420,8 +460,9 @@
   function formatLabel(j) {
     if (j.route === 'gallery') return 'Görsel';
     if (j.route === 'thumb') return 'Kapak görseli';
-    if (j.format === 'mp4') return 'MP4 · ' + (QUALITY[j.quality] || j.quality);
-    return j.format.toUpperCase();
+    const clip = j.section ? ` · ${fmtClock(j.section.start)}–${j.section.end == null ? 'son' : fmtClock(j.section.end)}` : '';
+    if (j.format === 'mp4') return 'MP4 · ' + (QUALITY[j.quality] || j.quality) + clip;
+    return j.format.toUpperCase() + clip;
   }
 
   function setMeta(el, parts) {
@@ -456,6 +497,7 @@
       setMeta(refs.meta, [
         { t: 'Tamamlandı', cls: 'good' },
         j.route === 'gallery' ? count : j.route === 'thumb' ? 'Kapak görseli' : j.format === 'mp4' ? 'MP4' : j.format.toUpperCase(),
+        j.section ? `Bölüm ${fmtClock(j.section.start)}–${j.section.end == null ? 'son' : fmtClock(j.section.end)}` : null,
         j.info,
         j.editorReady === true ? { t: 'Adobe/CapCut uyumlu ✓', cls: 'good' } : null,
         j.editorReady === false ? { t: 'Düzenleme uyumu doğrulanamadı', cls: 'warn' } : null,
@@ -471,11 +513,20 @@
     refs.bar.className = 'bar' + (indet || (j.status === 'downloading' && j.phase === 'updating') ? ' indeterminate' : '');
     refs.fill.style.width = (j.status === 'done' ? 100 : j.progress || 0) + '%';
 
+    // Düğmeler yalnızca durum değişince yeniden kurulur; her ilerleme güncellemesinde
+    // yenilenirse tıklamalar kaçabilir.
+    const actionKey = j.status + (canReclip(j) ? ':r' : '');
+    if (refs.actions.dataset.key === actionKey) {
+      updateCount();
+      return;
+    }
+    refs.actions.dataset.key = actionKey;
     refs.actions.textContent = '';
     const btn = (label, fn) => refs.actions.append(h('button', { type: 'button', text: label, onclick: fn }));
     if (j.status === 'done') {
       btn('Aç', () => api.openJob(j.id));
       btn('Klasörde göster', () => api.revealJob(j.id));
+      if (canReclip(j)) btn('Başka bölüm seç', () => reclip(j));
       btn('Kaldır', () => api.removeJob(j.id));
     } else if (j.status === 'error' || j.status === 'canceled') {
       btn('Tekrar dene', () => api.retryJob(j.id));
@@ -484,6 +535,29 @@
       btn('İptal', () => api.cancelJob(j.id));
     }
     updateCount();
+  }
+
+  // Biten tek YouTube videosu/sesi için aynı videodan yeni bir bölüm indirilebilir.
+  function canReclip(j) {
+    return j.platform === 'youtube' && j.route === 'ytdlp' && j.duration > 1 && ['mp4', 'mp3', 'm4a', 'wav'].includes(j.format);
+  }
+
+  async function reclip(j) {
+    const id = (/[?&]v=([\w-]{11})/.exec(j.url) || /youtu\.be\/([\w-]{11})/.exec(j.url) || [])[1] || null;
+    const picked = await window.BerTrim.open({ title: j.title, url: j.url, videoId: id, duration: j.duration, section: j.section });
+    if (!picked) return;
+    await api.enqueue({
+      format: j.format,
+      quality: j.quality,
+      route: 'ytdlp',
+      url: j.url,
+      platform: j.platform,
+      title: j.title,
+      thumbnail: j.thumbnail,
+      duration: j.duration,
+      section: picked
+    });
+    setHint('Yeni bölüm sıraya eklendi.', 'ok');
   }
 
   // Kapak küçük resmi; adres açılmazsa platformun baş harfi gösterilir.
