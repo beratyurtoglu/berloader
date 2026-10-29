@@ -8,6 +8,7 @@ const path = require('path');
 const MAX_BYTES = 1024 * 1024;
 let dir = null;
 let file = null;
+let written = 0; // bu oturumda yazılan bayt (uzun süre açık kalırsa da günlük şişmesin)
 const recent = []; // son satırlar bellekte de tutulur (tanılama için)
 
 function init(logDir) {
@@ -40,6 +41,11 @@ function write(level, args) {
   if (!file) return;
   try {
     fs.appendFileSync(file, line + '\n', 'utf8');
+    written += line.length + 1;
+    if (written > MAX_BYTES) {
+      written = 0;
+      fs.renameSync(file, path.join(dir, 'berloader.old.log'));
+    }
   } catch {
     /* yoksay */
   }

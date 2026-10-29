@@ -287,12 +287,13 @@ main {
 }
 .trim-handle:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .trim-readout { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.trim-time { display: flex; align-items: center; gap: 8px; }
+.trim-time { display: flex; align-items: center; gap: 8px; line-height: 28px; }
 .trim-time strong, .trim-len strong { font-variant-numeric: tabular-nums; font-size: 16px; }
 .trim-len { color: var(--text); }
-.step {
+.trim-step {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
   width: 28px; height: 28px; padding: 0; border-radius: 8px; border: 1px solid var(--line);
   background: var(--card-2); color: var(--text); cursor: pointer; font-size: 16px; line-height: 1;
 }
-.step:hover { border-color: var(--accent); }
+.trim-step:hover { border-color: var(--accent); }
 .modal-actions .grow { flex: 1 1 auto; }
