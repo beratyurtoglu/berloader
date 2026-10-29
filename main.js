@@ -9,6 +9,7 @@ const { Settings, History } = require('./src/store');
 const { Engine } = require('./src/engine');
 const { Downloader } = require('./src/downloader');
 const { Accounts } = require('./src/accounts');
+const { readUpdateConfig } = require('./src/updateConfig');
 
 app.setAppUserModelId('com.beratyurtoglu.berloader');
 
@@ -113,12 +114,13 @@ function createWindow() {
 function setupAppUpdater() {
   if (!app.isPackaged) return;
   try {
-    const pub = ((require('./package.json').build || {}).publish || [])[0] || {};
-    if (!pub.owner || /GITHUB_KULLANICI_ADIN/.test(pub.owner)) {
+    const cfg = readUpdateConfig(process.resourcesPath);
+    if (!cfg.ok) {
       updateState = { state: 'unconfigured' };
-      logger.info('Güncelleme deposu ayarlanmamış (package.json > publish.owner); uygulama güncellemesi kapalı.');
+      logger.warn('Uygulama güncellemesi kapalı:', cfg.reason);
       return;
     }
+    logger.info('Güncelleme deposu:', `${cfg.owner}/${cfg.repo}`);
     const { autoUpdater } = require('electron-updater');
     updater = autoUpdater;
     updater.autoDownload = true;

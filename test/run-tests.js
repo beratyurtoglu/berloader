@@ -309,6 +309,19 @@ t('buildYtdlpPreviewArgs: küçük, ses+görüntülü tek akış', () => {
   assert.strictEqual(a[a.length - 2], '--');
 });
 
+t('updateConfig: app-update.yml okuma', () => {
+  const { parseUpdateYml, readUpdateConfig } = require('../src/updateConfig');
+  const ok = parseUpdateYml('owner: beratyurtoglu\nrepo: berloader\nprovider: github\nreleaseType: release\nupdaterCacheDirName: berloader-updater\n');
+  assert.deepStrictEqual(ok, { provider: 'github', owner: 'beratyurtoglu', repo: 'berloader' });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bl-upd-'));
+  assert.strictEqual(readUpdateConfig(dir).ok, false); // dosya yok
+  fs.writeFileSync(path.join(dir, 'app-update.yml'), 'owner: GITHUB_KULLANICI_ADIN\nrepo: berloader\nprovider: github\n');
+  assert.strictEqual(readUpdateConfig(dir).ok, false); // yer tutucu
+  fs.writeFileSync(path.join(dir, 'app-update.yml'), 'owner: beratyurtoglu\nrepo: berloader\nprovider: github\n');
+  const r = readUpdateConfig(dir);
+  assert.ok(r.ok && r.owner === 'beratyurtoglu' && r.repo === 'berloader');
+});
+
 t('sanitizeName', () => {
   assert.strictEqual(A.sanitizeName('a<b>:"c/d\\e|f?g*h%'), 'a_b___c_d_e_f_g_h_');
   assert.strictEqual(A.sanitizeName('  ... '), 'BerLoader');
