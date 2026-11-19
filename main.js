@@ -52,7 +52,7 @@ function createWindow() {
     center: true, // her açılışta ekranın ortasında
     show: false,
     title: 'BerLoader',
-    backgroundColor: '#0b1220',
+    backgroundColor: '#12110f',
     autoHideMenuBar: true,
     icon: fs.existsSync(path.join(__dirname, 'build', 'icon.png')) ? path.join(__dirname, 'build', 'icon.png') : undefined,
     webPreferences: {
@@ -207,6 +207,12 @@ function registerIpc() {
   });
 
   ipcMain.handle('clipboard:read', () => clipboard.readText());
+  ipcMain.handle('clipboard:write', (_e, text) => {
+    // Yalnızca bağlantı kopyalanır (iş satırındaki "Bağlantıyı kopyala").
+    const t = String(text || '').slice(0, 4096);
+    if (/^https?:\/\//i.test(t)) clipboard.writeText(t);
+    return true;
+  });
   ipcMain.handle('folder:open', () => {
     const dir = settings.downloadDir();
     fs.mkdirSync(dir, { recursive: true });

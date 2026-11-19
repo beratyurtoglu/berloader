@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('berloader', {
   chooseFolder: () => ipcRenderer.invoke('dialog:folder'),
   chooseCookieFile: () => ipcRenderer.invoke('dialog:cookieFile'),
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),
+  writeClipboard: (text) => ipcRenderer.invoke('clipboard:write', text),
   openDownloadFolder: () => ipcRenderer.invoke('folder:open'),
 
   analyze: (payload) => ipcRenderer.invoke('url:analyze', payload),

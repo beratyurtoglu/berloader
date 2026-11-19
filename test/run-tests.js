@@ -322,6 +322,46 @@ t('updateConfig: app-update.yml okuma', () => {
   assert.ok(r.ok && r.owner === 'beratyurtoglu' && r.repo === 'berloader');
 });
 
+t('qualityTiers: yalnızca var olan kaliteler (8K/4K varsa)', () => {
+  const { qualityTiers } = require('../src/downloader');
+  // Eski video: en fazla 720p
+  assert.deepStrictEqual(
+    qualityTiers([
+      { format_id: 'sb0', ext: 'mhtml', vcodec: 'none', format_note: 'storyboard', width: 160, height: 90 },
+      { vcodec: 'none', acodec: 'opus' },
+      { vcodec: 'avc1', width: 640, height: 360, format_note: '360p' },
+      { vcodec: 'avc1', width: 1280, height: 720, format_note: '720p' }
+    ]),
+    [720, 360]
+  );
+  // 8K video
+  assert.deepStrictEqual(
+    qualityTiers([
+      { vcodec: 'av01', width: 7680, height: 4320, format_note: '4320p' },
+      { vcodec: 'vp9', width: 3840, height: 2160, format_note: '2160p60' },
+      { vcodec: 'avc1', width: 1920, height: 1080, format_note: '1080p' }
+    ]),
+    [4320, 2160, 1080]
+  );
+  // Dikey Shorts (kısa kenar) ve sinema oranı (notsuz)
+  assert.deepStrictEqual(qualityTiers([{ vcodec: 'avc1', width: 1080, height: 1920 }]), [1080]);
+  assert.deepStrictEqual(qualityTiers([{ vcodec: 'h264', width: 1920, height: 1012 }]), [1080]);
+  assert.deepStrictEqual(qualityTiers([]), []);
+});
+
+t('videoFps + normalizeSection: kare hassasiyeti', () => {
+  const { videoFps, normalizeSection } = require('../src/downloader');
+  assert.strictEqual(videoFps({ fps: 29.97 }), 29.97);
+  assert.strictEqual(videoFps({ formats: [{ fps: 25 }, { fps: 50 }, { fps: null }] }), 50);
+  assert.strictEqual(videoFps({}), null);
+  assert.deepStrictEqual(normalizeSection({ start: 7.4333333, end: 12.1 }, 'youtube'), { start: 7.433, end: 12.1 });
+  assert.strictEqual(normalizeSection({ start: 0, end: null }, 'youtube'), null);
+  assert.strictEqual(normalizeSection({ start: 1, end: 2 }, 'instagram'), null);
+  const a = A.buildYtdlpArgs({ url: 'u', format: 'mp4', quality: '4320', section: { start: 7.433, end: 12.1 } }, base);
+  assert.strictEqual(a[a.indexOf('--download-sections') + 1], '*7.433-12.1');
+  assert.ok(a.includes('res:4320,fps,vcodec:h264,acodec:aac'));
+});
+
 t('sanitizeName', () => {
   assert.strictEqual(A.sanitizeName('a<b>:"c/d\\e|f?g*h%'), 'a_b___c_d_e_f_g_h_');
   assert.strictEqual(A.sanitizeName('  ... '), 'BerLoader');

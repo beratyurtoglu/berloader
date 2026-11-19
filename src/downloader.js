@@ -109,6 +109,33 @@ function pickGalleryError(text) {
 
 // Arayüzden gelen bölüm bilgisini doğrular: { start: sn, end: sn | null } ya da null.
 // Yalnızca YouTube'da ve ses/video biçimlerinde geçerlidir.
+// Videonun gerçekten sunduğu kalite basamakları (büyükten küçüğe). Değer, görüntünün kısa
+// kenarıdır (yt-dlp "res" ile aynı ölçü): dikey 1080x1920 bir Shorts "1080p" sayılır.
+const QUALITY_TIERS = [4320, 2160, 1440, 1080, 720, 480, 360];
+function qualityTiers(formats) {
+  const found = new Set();
+  for (const f of formats || []) {
+    if (!f || f.vcodec === 'none' || f.ext === 'mhtml' || /storyboard/i.test(f.format_note || '')) continue;
+    let res = null;
+    const m = /(\d{3,4})p/.exec(f.format_note || '');
+    if (m) res = Number(m[1]);
+    else if (f.width && f.height) res = Math.min(f.width, f.height);
+    else if (f.height) res = f.height;
+    if (!res) continue;
+    const tier = QUALITY_TIERS.find((t) => res >= t * 0.92);
+    if (tier) found.add(tier);
+  }
+  return [...found].sort((a, b) => b - a);
+}
+
+// Kare hızı (kırpma ekranında kare kare ilerlemek için). Bilinmiyorsa null.
+function videoFps(info) {
+  const ok = (n) => Number.isFinite(Number(n)) && Number(n) > 1 && Number(n) <= 240;
+  if (ok(info.fps)) return Number(info.fps);
+  const list = (info.formats || []).map((f) => f && f.fps).filter(ok).map(Number);
+  return list.length ? Math.max(...list) : null;
+}
+
 function normalizeSection(sec, platform) {
   if (!sec || platform !== 'youtube') return null;
   const start = Number(sec.start) || 0;
@@ -116,7 +143,8 @@ function normalizeSection(sec, platform) {
   if (!Number.isFinite(start) || start < 0) return null;
   if (end !== null && (!Number.isFinite(end) || end <= start)) return null;
   if (start === 0 && end === null) return null;
-  return { start, end };
+  const r3 = (n) => Math.round(n * 1000) / 1000; // milisaniye yeter (kare hassasiyeti)
+  return { start: r3(start), end: end === null ? null : r3(end) };
 }
 
 function utf8Env() {
@@ -506,8 +534,8 @@ class Downloader extends EventEmitter {
   }
 
   _videoResult(url, p, info) {
-    const heights = (info.formats || []).map((f) => f.height).filter(Boolean);
     const thumb = info.thumbnail || (info.thumbnails && info.thumbnails.length ? info.thumbnails[info.thumbnails.length - 1].url : null);
+    const qualities = qualityTiers(info.formats);
     return {
       kind: 'video',
       route: 'ytdlp',
@@ -516,8 +544,10 @@ class Downloader extends EventEmitter {
       title: info.title || url,
       thumbnail: thumb || null,
       duration: info.duration || null,
+      fps: videoFps(info),
       videoId: p.platform === 'youtube' ? P.youtubeVideoId(url) : null,
-      maxHeight: heights.length ? Math.max(...heights) : null
+      qualities,
+      maxHeight: qualities.length ? qualities[0] : null
     };
   }
 
@@ -620,6 +650,7 @@ class Downloader extends EventEmitter {
         galleryFallback: !!p.galleryFallback,
         section: normalizeSection(p.section, p.platform),
         duration: Number(p.duration) > 0 ? Number(p.duration) : null,
+        fps: Number(p.fps) > 1 && Number(p.fps) <= 240 ? Number(p.fps) : null,
         status: 'queued',
         phase: 'queued',
         progress: 0,
@@ -1268,4 +1299,4 @@ class Downloader extends EventEmitter {
   }
 }
 
-module.exports = { Downloader, TERMINAL, runCapture, lastLine };
+module.exports = { Downloader, TERMINAL, runCapture, lastLine, qualityTiers, videoFps, normalizeSection };

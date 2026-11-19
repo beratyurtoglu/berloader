@@ -7,19 +7,23 @@
   // "…'dan/den indiriliyor" (Türkçe ünlü uyumuna göre)
   const FROM = { youtube: "YouTube'dan", instagram: "Instagram'dan", tiktok: "TikTok'tan", x: "X'ten", pinterest: "Pinterest'ten", other: 'Web üzerinden' };
   const PLAT_INFO = {
-    youtube: 'Video, Shorts ve oynatma listeleri. MP4 ya da ses olarak indirilir; "Görsel" seçersen kapak resmini indirir.',
+    youtube: 'Video, Shorts ve oynatma listeleri. "Görsel" seçersen kapak resmini indirir.',
     instagram: 'Reels, video ve fotoğraf gönderileri. Çoklu gönderide istediklerini seçersin.',
     tiktok: 'Video ve fotoğraf gönderileri. Çoklu gönderide istediklerini seçersin.',
     x: 'Video ve görselli gönderiler. Çoklu görselde istediklerini seçersin.',
     pinterest: 'Pin görselleri ve videoları.'
   };
-  const QUALITY = { best: 'En yüksek', 2160: '4K', 1440: '2K', 1080: '1080p', 720: '720p', 480: '480p' };
+  // Kalite basamakları: değer = görüntünün kısa kenarı (yt-dlp "res").
+  const TIERS = [4320, 2160, 1440, 1080, 720, 480, 360];
+  const TIER_NAME = { 4320: '8K', 2160: '4K', 1440: '2K', 1080: '1080p', 720: '720p', 480: '480p', 360: '360p' };
+  const tierLabel = (q) => (q >= 1440 ? `${TIER_NAME[q]} · ${q}p` : TIER_NAME[q] || `${q}p`);
   const TERMINAL = ['done', 'error', 'canceled'];
   const ACCOUNT_ORDER = ['instagram', 'x', 'tiktok', 'pinterest'];
 
   let settings = {};
   let accounts = {};
   let platform = null; // zorunlu: kullanıcı seçmeden indirme yapılmaz
+  let cutMode = false; // "Keserek indir": yalnızca sıradaki tek video için
   const jobs = new Map();
   const rows = new Map();
   let paused = false;
@@ -38,6 +42,17 @@
     return el;
   }
 
+  const SVG = 'http://www.w3.org/2000/svg';
+  function icon(name) {
+    const svg = document.createElementNS(SVG, 'svg');
+    svg.setAttribute('class', 'ic');
+    svg.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS(SVG, 'use');
+    use.setAttribute('href', '#i-' + name);
+    svg.append(use);
+    return svg;
+  }
+
   function fmtSpeed(bps) {
     if (!bps) return '';
     if (bps > 1048576) return (bps / 1048576).toFixed(1) + ' MB/sn';
@@ -49,6 +64,14 @@
     const s = Math.round(sec % 60);
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }
+  function fmtDuration(sec) {
+    const t = Math.round(Number(sec) || 0);
+    const hh = Math.floor(t / 3600);
+    const mm = Math.floor((t % 3600) / 60);
+    const ss = t % 60;
+    return hh ? `${hh}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}` : `${mm}:${String(ss).padStart(2, '0')}`;
+  }
+  const clipText = (sec) => `${window.BerTrim.shortTime(sec.start || 0)}–${sec.end == null ? 'son' : window.BerTrim.shortTime(sec.end)}`;
 
   // Yapıştırılan bağlantıdan platformu tahmin eder (yalnızca ipucu; asıl doğrulama ana süreçte).
   function guessPlatform(text) {
@@ -62,18 +85,19 @@
     if (/(^|\.)pinterest\.[a-z.]+$|^pin\.it$/.test(host)) return 'pinterest';
     return null;
   }
+  const looksLikeUrl = (t) => /^(https?:\/\/)?[^\s/]+\.[a-z]{2,}\/\S+/i.test(String(t).trim());
 
   function setHint(text, kind) {
     const el = $('#hint');
     el.textContent = text || '';
-    el.className = 'hint grow' + (kind ? ' ' + kind : '');
+    el.className = 'hint' + (kind ? ' ' + kind : '');
   }
 
   function setBusy(on, text) {
     busy = on;
     $('#downloadBtn').disabled = on;
     $('#urlInput').disabled = on;
-    $('#downloadBtn').textContent = on ? 'Bekle…' : 'İndir';
+    $('#downloadBtn').querySelector('span').textContent = on ? 'Bekle…' : 'İndir';
     if (on) setHint(text || 'Bağlantı çözümleniyor…');
   }
 
@@ -110,15 +134,16 @@
 
   function applySettingsToUi() {
     $('#formatSelect').value = settings.format;
-    $('#qualitySelect').value = settings.quality;
     $('#dirLabel').textContent = settings.downloadDir;
-    $('#setDir').value = settings.downloadDir;
+    $('#setDir').textContent = settings.downloadDir;
+    $('#setDir').title = settings.downloadDir;
     $('#setByPlatform').checked = !!settings.organizeByPlatform;
     $('#setConcurrent').value = String(settings.concurrent);
     $('#setCompat').checked = !!settings.editorCompat;
     $('#setAutoClear').checked = !!settings.autoClearDone;
     $('#setCookies').value = settings.cookiesBrowser;
-    $('#setCookieFile').value = settings.cookiesFile || '';
+    $('#setCookieFile').textContent = settings.cookiesFile || 'Seçilmedi';
+    $('#setCookieFile').title = settings.cookiesFile || '';
     $('#setChannel').value = settings.engineChannel;
     $('#setAutoEngine').checked = !!settings.autoUpdateEngine;
     $('#setSolver').checked = !!settings.youtubeRemoteSolver;
@@ -133,12 +158,15 @@
 
   // ---------- Platform seçimi ----------
   function selectPlatform(p) {
+    const changed = p !== platform;
     platform = p;
     for (const b of document.querySelectorAll('.plat')) b.setAttribute('aria-pressed', String(b.dataset.platform === p));
     $('#platforms').classList.remove('needs-pick');
+    if (changed) setCut(false); // başka platforma geçince kesme modu kapanır
     setHint('');
     renderPlatformHint();
     refreshOptions();
+    scheduleProbe(0);
     $('#urlInput').focus();
   }
 
@@ -146,32 +174,40 @@
     const el = $('#platformHint');
     el.textContent = '';
     if (!platform) {
-      el.append(h('span', { text: 'İndirme yapacağın platformu seç.' }));
+      el.append(h('span', { text: 'Önce indirme yapacağın platformu seç.' }));
       return;
     }
     el.append(h('span', { text: PLAT_INFO[platform] }));
     const acc = accounts[platform];
     if (acc) {
       if (acc.loggedIn) {
-        el.append(h('span', { class: 'muted', text: '· Hesap bağlı ✓' }));
+        el.append(h('span', { class: 'ok', text: 'Hesap bağlı' }));
       } else if (platform === 'instagram') {
         el.append(
           h('span', { class: 'warn', text: 'Instagram çoğu içerik için giriş ister.' }),
-          h('button', { type: 'button', text: 'Giriş yap', onclick: () => loginAccount(platform) })
+          h('button', { class: 'btn', type: 'button', text: 'Giriş yap', onclick: () => loginAccount(platform) })
         );
       }
     }
   }
 
+  // Biçime ve platforma göre seçenekleri gösterir/gizler.
   function refreshOptions() {
     const fmt = $('#formatSelect');
     const imgOpt = fmt.querySelector('option[value="image"]');
-    imgOpt.disabled = false;
     imgOpt.textContent = platform === 'youtube' ? 'Görsel (kapak resmi)' : 'Görsel';
     fmt.value = settings.format;
-    $('#qualitySelect').classList.toggle('hidden', settings.format !== 'mp4');
-    // Bölüm indirme: YouTube'da video/ses biçimlerinde.
-    $('#sectionRow').classList.toggle('hidden', !(platform === 'youtube' && settings.format !== 'image'));
+    const canCut = platform === 'youtube' && settings.format !== 'image';
+    $('#cutToggle').classList.toggle('hidden', !canCut);
+    if (!canCut && cutMode) setCut(false);
+    renderQuality();
+  }
+
+  function setCut(on) {
+    cutMode = !!on;
+    $('#cutToggle').setAttribute('aria-pressed', String(cutMode));
+    if (cutMode) setHint("İndir'e basınca önizleme açılır; giriş ve çıkış noktasını seçersin. Yalnızca bu video için geçerli.");
+    else if ($('#hint').textContent.startsWith("İndir'e basınca önizleme")) setHint('');
   }
 
   function flashPlatforms() {
@@ -179,6 +215,114 @@
     box.classList.remove('needs-pick');
     void box.offsetWidth; // animasyonu yeniden başlat
     box.classList.add('needs-pick');
+  }
+
+  // ---------- Bağlantı ön çözümleme ----------
+  // Bağlantı yapıştırılınca arka planda çözümlenir: başlık, süre ve gerçekten var olan
+  // kalite seçenekleri gösterilir. İndir'e basınca aynı sonuç yeniden kullanılır.
+  const probes = new Map(); // anahtar -> { promise, res, at }
+  let probeTimer = 0;
+  let current = null; // { key, res } ekrandaki bağlantının sonucu
+
+  const formatKind = (f) => (f === 'image' ? 'image' : f === 'mp4' ? 'video' : 'audio');
+  const probeKey = (url, p, f) => `${p}|${formatKind(f)}|${url}`;
+
+  function analyzeCached(url, p, f) {
+    const key = probeKey(url, p, f);
+    const hit = probes.get(key);
+    if (hit && Date.now() - hit.at < 10 * 60 * 1000 && !(hit.res && !hit.res.ok)) return hit.promise;
+    const entry = { at: Date.now(), res: null, promise: null };
+    entry.promise = api.analyze({ url, platform: p, format: f }).then(
+      (res) => (entry.res = res),
+      (e) => (entry.res = { ok: false, error: e.message || 'Bağlantı çözümlenemedi.' })
+    );
+    probes.set(key, entry);
+    if (probes.size > 30) probes.delete(probes.keys().next().value);
+    return entry.promise;
+  }
+
+  function scheduleProbe(delay = 450) {
+    clearTimeout(probeTimer);
+    probeTimer = setTimeout(runProbe, delay);
+  }
+
+  async function runProbe() {
+    const url = $('#urlInput').value.trim();
+    const g = guessPlatform(url);
+    if (!platform || !url || !looksLikeUrl(url) || (g && g !== platform)) {
+      current = null;
+      renderProbe(null);
+      renderQuality();
+      return;
+    }
+    const key = probeKey(url, platform, settings.format);
+    if (current && current.key === key && current.res) return;
+    current = { key, res: null };
+    renderProbe({ loading: true });
+    renderQuality();
+    const res = await analyzeCached(url, platform, settings.format);
+    if (!current || current.key !== key) return; // bu arada bağlantı değişti
+    current.res = res;
+    renderProbe(res);
+    renderQuality();
+  }
+
+  function renderProbe(state) {
+    const box = $('#probeLine');
+    box.textContent = '';
+    box.className = 'probe';
+    if (!state) {
+      box.classList.add('hidden');
+      return;
+    }
+    if (state.loading) {
+      box.classList.add('loading');
+      box.append(h('span', { class: 'spin' }), h('span', { class: 'probe-title', text: 'Bağlantıya bakılıyor…' }));
+      return;
+    }
+    if (!state.ok) {
+      box.classList.add('hidden');
+      return;
+    }
+    const r = state.result;
+    const meta = [];
+    if (r.kind === 'playlist') meta.push(`Oynatma listesi · ${r.count} video`);
+    else if (r.kind === 'gallery') meta.push(`${r.items.length} öğe`);
+    else {
+      if (r.duration) meta.push(fmtDuration(r.duration));
+      if (settings.format === 'mp4' && r.qualities && r.qualities.length) meta.push('en fazla ' + TIER_NAME[r.qualities[0]]);
+    }
+    box.append(h('span', { class: 'probe-title', text: r.title || '' }), meta.length ? h('span', { class: 'probe-meta', text: meta.join(' · ') }) : null);
+  }
+
+  // Kalite listesi yalnızca videonun gerçekten sunduğu seçeneklerden oluşur.
+  function renderQuality() {
+    const sel = $('#qualitySelect');
+    const show = settings.format === 'mp4';
+    sel.classList.toggle('hidden', !show);
+    if (!show) return;
+    sel.textContent = '';
+    const r = current && current.res && current.res.ok ? current.res.result : null;
+    const loading = current && !current.res;
+    if (loading) {
+      sel.append(h('option', { value: 'best', text: 'Kaliteler alınıyor…' }));
+      sel.disabled = true;
+      return;
+    }
+    sel.disabled = false;
+    let tiers = [];
+    if (r && r.kind === 'video' && Array.isArray(r.qualities)) tiers = r.qualities;
+    else if (r && r.kind === 'playlist') tiers = [1080, 720, 480]; // liste: her videonun en iyisi, isteğe bağlı üst sınır
+    if (r && r.kind === 'video' && tiers.length) {
+      sel.append(h('option', { value: 'best', text: `En yüksek · ${tierLabel(tiers[0])}` }));
+      for (const q of tiers.slice(1)) sel.append(h('option', { value: String(q), text: tierLabel(q) }));
+    } else {
+      sel.append(h('option', { value: 'best', text: 'En yüksek kalite' }));
+      for (const q of tiers) sel.append(h('option', { value: String(q), text: `En çok ${tierLabel(q)}` }));
+    }
+    sel.disabled = sel.options.length < 2;
+    const want = String(settings.quality);
+    sel.value = [...sel.options].some((o) => o.value === want) ? want : 'best';
   }
 
   // ---------- Hesaplar ----------
@@ -211,7 +355,7 @@
       const state = h('span', { class: 'state' + (a.loggedIn ? ' on' : ''), text: a.loggedIn ? 'Giriş yapıldı' : 'Giriş yapılmadı' });
       const btn = a.loggedIn
         ? h('button', {
-            class: 'secondary',
+            class: 'btn quiet',
             type: 'button',
             text: 'Çıkış yap',
             onclick: async () => {
@@ -220,24 +364,9 @@
               renderPlatformHint();
             }
           })
-        : h('button', { class: 'secondary', type: 'button', text: 'Giriş yap', onclick: () => loginAccount(key) });
-      const row = h('div', { class: 'account', 'data-platform': key }, h('span', { class: 'name' }, h('i'), LABEL[key]), state, h('span', { class: 'grow' }), btn);
-      box.append(row);
+        : h('button', { class: 'btn secondary', type: 'button', text: 'Giriş yap', onclick: () => loginAccount(key) });
+      box.append(h('div', { class: 'account', 'data-platform': key }, h('span', { class: 'name' }, h('i'), LABEL[key]), state, h('span', { class: 'grow' }), btn));
     }
-  }
-
-  // ---------- Bölüm (başlangıç/bitiş) ----------
-  // Bölüm kutusu işaretliyse İndir'e basınca önizleme + sürgü ekranı açılır.
-  function wantsSection() {
-    return $('#sectionToggle').checked && !$('#sectionRow').classList.contains('hidden');
-  }
-
-  function fmtClock(sec) {
-    const t = Math.round(sec);
-    const hh = Math.floor(t / 3600);
-    const mm = Math.floor((t % 3600) / 60);
-    const ss = t % 60;
-    return hh ? `${hh}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}` : `${mm}:${String(ss).padStart(2, '0')}`;
   }
 
   // ---------- İndirme akışı ----------
@@ -259,11 +388,13 @@
       flashPlatforms();
       return;
     }
-    const wantSec = wantsSection();
+    const wantCut = cutMode && !$('#cutToggle').classList.contains('hidden');
+    const format = settings.format;
+    const quality = $('#qualitySelect').disabled ? 'best' : $('#qualitySelect').value || 'best';
     setBusy(true);
     let res;
     try {
-      res = await api.analyze({ url: raw, platform, format: settings.format });
+      res = await analyzeCached(raw, platform, format);
     } finally {
       setBusy(false);
     }
@@ -273,24 +404,22 @@
     }
     setHint('');
     const r = res.result;
-    const common = { format: settings.format, quality: settings.quality };
-    if (wantSec && r.kind === 'playlist') {
-      setHint('Bölüm seçimi yalnızca tek video için çalışır. Bölüm kutusunu kapat ya da tek bir video bağlantısı yapıştır.', 'error');
+    const common = { format, quality };
+    if (wantCut && r.kind === 'playlist') {
+      setHint('Keserek indirme yalnızca tek video için çalışır. "Keserek indir"i kapat ya da tek bir video bağlantısı yapıştır.', 'error');
       return;
     }
-    if (wantSec && r.kind === 'video') {
+    if (wantCut && r.kind === 'video') {
       if (!r.duration) {
         setHint('Bu videonun süresi öğrenilemedi (canlı yayın olabilir); bölüm seçilemiyor.', 'error');
         return;
       }
-      setHint('Önizleme açılıyor…');
-      const picked = await window.BerTrim.open({ title: r.title, url: r.url, videoId: r.videoId, duration: r.duration });
+      const picked = await window.BerTrim.open({ title: r.title, url: r.url, videoId: r.videoId, duration: r.duration, fps: r.fps });
       if (!picked) {
         setHint('Bölüm seçilmedi; indirme başlatılmadı.');
         return;
       }
       common.section = picked;
-      common.duration = r.duration;
     }
 
     if (r.kind === 'playlist') {
@@ -307,7 +436,8 @@
           platform: r.platform,
           title: e.title,
           subdir: r.title,
-          prefix: String(e.index).padStart(pad, '0')
+          prefix: String(e.index).padStart(pad, '0'),
+          duration: e.duration || null
         }))
       });
       setHint(`${r.count} video sıraya eklendi.`, 'ok');
@@ -339,27 +469,29 @@
         title: r.title,
         thumbnail: r.thumbnail,
         galleryFallback: r.galleryFallback,
-        duration: r.duration || null
+        duration: r.duration || null,
+        fps: r.fps || null
       });
-      if (settings.format === 'mp4' && r.maxHeight && settings.quality !== 'best' && Number(settings.quality) > r.maxHeight) {
-        setHint(`Bu video en fazla ${r.maxHeight}p; o kalitede indirilecek.`, 'ok');
-      } else {
-        setHint('Sıraya eklendi.', 'ok');
-      }
+      setHint(common.section ? `Bölüm sıraya eklendi (${clipText(common.section)}).` : 'Sıraya eklendi.', 'ok');
     }
+    // Sıradaki bağlantı için temiz başlangıç: kesme modu tek seferliktir.
     $('#urlInput').value = '';
-    if ($('#sectionToggle').checked) {
-      // Bir sonraki videoya yanlışlıkla uygulanmasın.
-      $('#sectionToggle').checked = false;
+    current = null;
+    renderProbe(null);
+    renderQuality();
+    if (cutMode) {
+      cutMode = false;
+      $('#cutToggle').setAttribute('aria-pressed', 'false');
     }
     $('#urlInput').focus();
   }
 
   function askPlaylist(r) {
     return new Promise((resolve) => {
-      $('#playlistText').textContent = `Bu bağlantı bir oynatma listesi: "${r.title}" (${r.count} video). Listenin tamamını indirmek istiyor musunuz?`;
+      $('#playlistText').textContent = `"${r.title}" bir oynatma listesi (${r.count} video). Listenin tamamı sıraya eklensin mi?`;
       const modal = $('#playlistModal');
       modal.classList.remove('hidden');
+      $('#playlistYes').focus();
       const done = (v) => {
         modal.classList.add('hidden');
         $('#playlistYes').onclick = null;
@@ -400,7 +532,7 @@
             ? h('img', { src: it.thumb, referrerpolicy: 'no-referrer', loading: 'lazy', alt: '' })
             : h('div', { class: 'ph', text: it.type === 'video' ? 'Video' : 'Görsel' }),
           h('span', { class: 'num', text: String(it.index) }),
-          h('span', { class: 'tick', text: '✓' }),
+          h('span', { class: 'tick' }, icon('check')),
           it.type === 'video' ? h('span', { class: 'badge-v', text: 'Video' }) : null
         );
         cells.set(it.index, cell);
@@ -441,13 +573,13 @@
         if (j.phase === 'updating') return 'İndirme motoru güncelleniyor, ardından yeniden denenecek…';
         if (j.phase === 'merging') return 'Video ve ses birleştiriliyor…';
         if (j.phase === 'finishing') return 'Dosyalar düzenleniyor…';
-        const parts = [j.section && !j.progress ? `${from} seçilen bölüm indiriliyor…` : `${from} indiriliyor %${j.progress || 0}`];
+        const parts = [j.section && !j.progress ? 'Seçilen bölüm indiriliyor…' : `%${j.progress || 0}`];
         if (j.speed) parts.push(fmtSpeed(j.speed));
         if (j.eta != null && j.eta !== 0) parts.push('kalan ' + fmtEta(j.eta));
         return parts.join(' · ');
       }
       case 'converting':
-        return (j.phase === 'encoding' ? 'Adobe/CapCut uyumu için H.264 + AAC\'ye dönüştürülüyor' : 'MP4 kabına alınıyor') + ` %${j.progress || 0}`;
+        return (j.phase === 'encoding' ? 'H.264 + AAC olarak kodlanıyor' : 'MP4 kabına alınıyor') + ` %${j.progress || 0}`;
       case 'canceled':
         return j.error || 'İptal edildi';
       case 'error':
@@ -457,12 +589,17 @@
     }
   }
 
-  function formatLabel(j) {
-    if (j.route === 'gallery') return 'Görsel';
-    if (j.route === 'thumb') return 'Kapak görseli';
-    const clip = j.section ? ` · ${fmtClock(j.section.start)}–${j.section.end == null ? 'son' : fmtClock(j.section.end)}` : '';
-    if (j.format === 'mp4') return 'MP4 · ' + (QUALITY[j.quality] || j.quality) + clip;
-    return j.format.toUpperCase() + clip;
+  function qualityText(q) {
+    if (!q || q === 'best') return 'En yüksek';
+    return TIER_NAME[q] ? TIER_NAME[q] : `${q}p`;
+  }
+
+  function formatParts(j) {
+    if (j.route === 'gallery') return ['Görsel'];
+    if (j.route === 'thumb') return ['Kapak görseli'];
+    const parts = [j.format === 'mp4' ? 'MP4 · ' + qualityText(j.quality) : j.format.toUpperCase()];
+    if (j.section) parts.push({ t: clipText(j.section), cls: 'clip' });
+    return parts;
   }
 
   function setMeta(el, parts) {
@@ -497,44 +634,70 @@
       setMeta(refs.meta, [
         { t: 'Tamamlandı', cls: 'good' },
         j.route === 'gallery' ? count : j.route === 'thumb' ? 'Kapak görseli' : j.format === 'mp4' ? 'MP4' : j.format.toUpperCase(),
-        j.section ? `Bölüm ${fmtClock(j.section.start)}–${j.section.end == null ? 'son' : fmtClock(j.section.end)}` : null,
+        j.section ? { t: clipText(j.section), cls: 'clip' } : null,
         j.info,
-        j.editorReady === true ? { t: 'Adobe/CapCut uyumlu ✓', cls: 'good' } : null,
-        j.editorReady === false ? { t: 'Düzenleme uyumu doğrulanamadı', cls: 'warn' } : null,
+        j.editorReady === false ? { t: 'Kurgu uyumu doğrulanamadı', cls: 'warn' } : null,
         j.note ? { t: j.note, cls: 'warn' } : null
       ]);
-    } else if (isErr) {
-      setMeta(refs.meta, [formatLabel(j), statusText(j)]);
     } else {
-      setMeta(refs.meta, [formatLabel(j), statusText(j)]);
+      setMeta(refs.meta, [...formatParts(j), statusText(j)]);
     }
 
-    const indet = ['analyzing', 'converting'].includes(j.status) && !j.progress;
-    refs.bar.className = 'bar' + (indet || (j.status === 'downloading' && j.phase === 'updating') ? ' indeterminate' : '');
-    refs.fill.style.width = (j.status === 'done' ? 100 : j.progress || 0) + '%';
+    const indet = (['analyzing', 'converting'].includes(j.status) && !j.progress) || (j.status === 'downloading' && j.phase === 'updating');
+    refs.bar.className = 'bar' + (indet ? ' indeterminate' : '');
+    refs.fill.style.width = (j.progress || 0) + '%';
 
     // Düğmeler yalnızca durum değişince yeniden kurulur; her ilerleme güncellemesinde
     // yenilenirse tıklamalar kaçabilir.
     const actionKey = j.status + (canReclip(j) ? ':r' : '');
-    if (refs.actions.dataset.key === actionKey) {
-      updateCount();
-      return;
-    }
-    refs.actions.dataset.key = actionKey;
-    refs.actions.textContent = '';
-    const btn = (label, fn) => refs.actions.append(h('button', { type: 'button', text: label, onclick: fn }));
-    if (j.status === 'done') {
-      btn('Aç', () => api.openJob(j.id));
-      btn('Klasörde göster', () => api.revealJob(j.id));
-      if (canReclip(j)) btn('Başka bölüm seç', () => reclip(j));
-      btn('Kaldır', () => api.removeJob(j.id));
-    } else if (j.status === 'error' || j.status === 'canceled') {
-      btn('Tekrar dene', () => api.retryJob(j.id));
-      btn('Kaldır', () => api.removeJob(j.id));
-    } else {
-      btn('İptal', () => api.cancelJob(j.id));
+    if (refs.actions.dataset.key !== actionKey) {
+      refs.actions.dataset.key = actionKey;
+      buildActions(refs.actions, j);
     }
     updateCount();
+  }
+
+  function iconBtn(name, label, fn) {
+    return h('button', { class: 'btn icon-btn', type: 'button', title: label, 'aria-label': label, onclick: fn }, icon(name));
+  }
+
+  function copyLinkBtn(j) {
+    const b = iconBtn('link', 'Bağlantıyı kopyala', async () => {
+      await api.writeClipboard(j.url);
+      b.classList.add('done-flash');
+      b.title = 'Kopyalandı';
+      b.querySelector('use').setAttribute('href', '#i-check');
+      setTimeout(() => {
+        b.classList.remove('done-flash');
+        b.title = 'Bağlantıyı kopyala';
+        b.querySelector('use').setAttribute('href', '#i-link');
+      }, 1400);
+    });
+    return b;
+  }
+
+  function buildActions(box, j) {
+    box.textContent = '';
+    const id = j.id;
+    let items;
+    if (j.status === 'done') {
+      items = [
+        h('button', { class: 'btn text', type: 'button', text: 'Aç', onclick: () => api.openJob(id) }),
+        iconBtn('folder', 'Klasörde göster', () => api.revealJob(id)),
+        canReclip(j) ? iconBtn('scissors', 'Bu videodan bir bölüm kes', () => reclip(jobs.get(id) || j)) : null,
+        copyLinkBtn(j),
+        iconBtn('x', 'Listeden kaldır', () => api.removeJob(id))
+      ];
+    } else if (j.status === 'error' || j.status === 'canceled') {
+      items = [
+        h('button', { class: 'btn text', type: 'button', onclick: () => api.retryJob(id) }, icon('retry'), h('span', { text: 'Tekrar dene' })),
+        copyLinkBtn(j),
+        iconBtn('x', 'Listeden kaldır', () => api.removeJob(id))
+      ];
+    } else {
+      items = [copyLinkBtn(j), iconBtn('x', 'İptal et', () => api.cancelJob(id))];
+    }
+    box.append(...items.filter(Boolean));
   }
 
   // Biten tek YouTube videosu/sesi için aynı videodan yeni bir bölüm indirilebilir.
@@ -543,8 +706,9 @@
   }
 
   async function reclip(j) {
-    const id = (/[?&]v=([\w-]{11})/.exec(j.url) || /youtu\.be\/([\w-]{11})/.exec(j.url) || [])[1] || null;
-    const picked = await window.BerTrim.open({ title: j.title, url: j.url, videoId: id, duration: j.duration, section: j.section });
+    const id = (/[?&]v=([\w-]{11})/.exec(j.url) || /youtu\.be\/([\w-]{11})/.exec(j.url) || /shorts\/([\w-]{11})/.exec(j.url) || [])[1] || null;
+    // Bölüm seçmeden indirilmiş bir videoda ekran tüm videoyla açılır.
+    const picked = await window.BerTrim.open({ title: j.title, url: j.url, videoId: id, duration: j.duration, fps: j.fps, section: j.section || null });
     if (!picked) return;
     await api.enqueue({
       format: j.format,
@@ -555,9 +719,10 @@
       title: j.title,
       thumbnail: j.thumbnail,
       duration: j.duration,
+      fps: j.fps || null,
       section: picked
     });
-    setHint('Yeni bölüm sıraya eklendi.', 'ok');
+    setHint(`Yeni bölüm sıraya eklendi (${clipText(picked)}).`, 'ok');
   }
 
   // Kapak küçük resmi; adres açılmazsa platformun baş harfi gösterilir.
@@ -602,18 +767,29 @@
   function updateCount() {
     const all = [...jobs.values()];
     const active = all.filter((j) => !TERMINAL.includes(j.status)).length;
-    $('#jobCount').textContent = active ? `${all.length} işlem · ${active} sürüyor` : `${all.length} işlem`;
+    $('#jobCount').textContent = all.length ? (active ? `${all.length} · ${active} sürüyor` : String(all.length)) : '';
     $('#emptyState').classList.toggle('hidden', all.length > 0);
   }
 
   // ---------- Motor ve güncelleme durumu ----------
   function renderEngine(s) {
     if (!s) return;
-    const label = $('#engineLabel');
-    if (s.phase === 'downloading') label.textContent = `${s.message}… %${s.percent || 0}`;
-    else if (s.phase === 'checking') label.textContent = 'Motorlar denetleniyor…';
-    else if (s.phase === 'error') label.textContent = 'Motor hatası: ' + (s.message || '').slice(0, 80);
-    else label.textContent = s.ytdlp ? `yt-dlp ${s.ytdlp}` : 'Motorlar hazırlanıyor…';
+    // Ana ekranda yalnızca bir şey olurken görünür; sürüm bilgisi Ayarlar > Gelişmiş'te.
+    const chip = $('#engineChip');
+    chip.classList.remove('error');
+    if (s.phase === 'downloading') {
+      chip.textContent = `${s.message || 'Motorlar indiriliyor'} %${s.percent || 0}`;
+      chip.classList.remove('hidden');
+    } else if (s.phase === 'error') {
+      chip.textContent = 'İndirme motoru hatası · Ayarlar > Gelişmiş';
+      chip.classList.add('error');
+      chip.classList.remove('hidden');
+    } else if (!s.ytdlp) {
+      chip.textContent = 'İndirme motorları hazırlanıyor…';
+      chip.classList.remove('hidden');
+    } else {
+      chip.classList.add('hidden');
+    }
 
     const box = $('#engineInfo');
     box.textContent = '';
@@ -622,7 +798,7 @@
     line('gallery-dl', s.gallerydl || 'kurulu değil', s.gallerydl ? '' : 'bad');
     line('deno', s.deno || 'kurulu değil', s.deno ? '' : 'bad');
     const ff = {
-      ready: ['Hazır (H.264 + AAC ✓)', 'good'],
+      ready: ['Hazır (H.264 + AAC)', 'good'],
       checking: ['Denetleniyor…', ''],
       broken: ['H.264/AAC kodlayıcı eksik ya da çalışmıyor', 'bad'],
       missing: ['Bulunamadı', 'bad']
@@ -632,7 +808,7 @@
 
     const msg = $('#engineMsg');
     msg.textContent = s.phase === 'error' ? s.message : s.phase === 'idle' ? s.message || '' : s.message || 'Çalışıyor…';
-    msg.className = 'hint grow' + (s.phase === 'error' || (s.phase === 'idle' && s.message) ? ' error' : '');
+    msg.className = 'hint' + (s.phase === 'error' || (s.phase === 'idle' && s.message) ? ' error' : '');
     $('#engineUpdateBtn').disabled = s.phase === 'downloading' || s.phase === 'checking';
   }
 
@@ -642,7 +818,7 @@
     const msg = $('#appUpdateMsg');
     b.classList.add('hidden');
     b.disabled = false;
-    msg.className = 'hint grow';
+    msg.className = 'hint';
     if (u.state === 'downloading') {
       b.classList.remove('hidden');
       b.disabled = true;
@@ -652,21 +828,40 @@
       b.classList.remove('hidden');
       b.textContent = `v${u.version} hazır · Yeniden başlat`;
       msg.textContent = `v${u.version} kuruluma hazır.`;
-      msg.className = 'hint grow ok';
+      msg.className = 'hint ok';
     } else if (u.state === 'none') {
       msg.textContent = 'Uygulama güncel.';
     } else if (u.state === 'checking') {
       msg.textContent = 'Denetleniyor…';
     } else if (u.state === 'error') {
       msg.textContent = 'Denetlenemedi: ' + (u.message || '');
-      msg.className = 'hint grow error';
+      msg.className = 'hint error';
     } else if (u.state === 'unconfigured') {
-      msg.textContent = 'Güncelleme deposu henüz ayarlanmadı (isteğe bağlı). Motorlar yine otomatik güncellenir.';
+      msg.textContent = 'Güncelleme deposu bulunamadı; uygulama güncellemesi kapalı.';
     } else if (u.state === 'dev') {
       msg.textContent = 'Geliştirme modunda güncelleme kapalı.';
     } else {
       msg.textContent = '';
     }
+  }
+
+  // ---------- Ayarlar ekranı ----------
+  function showSettings(on) {
+    $('#settingsView').classList.toggle('hidden', !on);
+    $('#mainView').classList.toggle('hidden', on);
+    $('#openSettings').classList.toggle('hidden', on);
+    if (on) {
+      refreshAccounts();
+      const sel = document.querySelector('.set-tab[aria-selected="true"]');
+      if (sel) sel.focus();
+    } else {
+      $('#openSettings').focus();
+    }
+  }
+  function selectTab(name) {
+    for (const t of document.querySelectorAll('.set-tab')) t.setAttribute('aria-selected', String(t.dataset.tab === name));
+    for (const p of document.querySelectorAll('.set-panel')) p.classList.toggle('hidden', p.dataset.panel !== name);
+    $('.set-body').scrollTop = 0;
   }
 
   // ---------- Olaylar ----------
@@ -681,18 +876,24 @@
     const g = guessPlatform($('#urlInput').value);
     if (g && platform && g !== platform) setHint(`Bu bağlantı ${LABEL[g]} bağlantısı görünüyor. Yukarıdan ${LABEL[g]}'ı seç.`, 'error');
     else if (g && !platform) setHint(`Bu bağlantı ${LABEL[g]} bağlantısı görünüyor. Yukarıdan ${LABEL[g]}'ı seç.`);
-    else setHint('');
+    else if ($('#hint').classList.contains('error') || $('#hint').classList.contains('ok')) setHint('');
+    scheduleProbe();
   });
   $('#pasteBtn').addEventListener('click', async () => {
     const t = await api.readClipboard();
     if (t) {
       $('#urlInput').value = t.trim();
       $('#urlInput').dispatchEvent(new Event('input'));
+      scheduleProbe(0);
       $('#urlInput').focus();
     }
   });
-  $('#formatSelect').addEventListener('change', (e) => save({ format: e.target.value }));
+  $('#formatSelect').addEventListener('change', async (e) => {
+    await save({ format: e.target.value });
+    scheduleProbe(0);
+  });
   $('#qualitySelect').addEventListener('change', (e) => save({ quality: e.target.value }));
+  $('#cutToggle').addEventListener('click', () => setCut(!cutMode));
 
   $('#pauseBtn').addEventListener('click', async () => {
     paused = await api.pauseQueue(!paused);
@@ -701,16 +902,22 @@
   $('#clearBtn').addEventListener('click', () => api.clearFinished());
   $('#openFolder').addEventListener('click', () => api.openDownloadFolder());
 
-  $('#openSettings').addEventListener('click', () => {
-    $('#settingsModal').classList.remove('hidden');
-    refreshAccounts();
-  });
-  $('#closeSettings').addEventListener('click', () => $('#settingsModal').classList.add('hidden'));
-  $('#settingsModal').addEventListener('mousedown', (e) => {
-    if (e.target.id === 'settingsModal') $('#settingsModal').classList.add('hidden');
-  });
+  $('#openSettings').addEventListener('click', () => showSettings(true));
+  $('#closeSettings').addEventListener('click', () => showSettings(false));
+  for (const t of document.querySelectorAll('.set-tab')) {
+    t.addEventListener('click', () => selectTab(t.dataset.tab));
+    t.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      e.preventDefault();
+      const tabs = [...document.querySelectorAll('.set-tab')];
+      const i = tabs.indexOf(t) + (e.key === 'ArrowDown' ? 1 : -1);
+      const next = tabs[(i + tabs.length) % tabs.length];
+      selectTab(next.dataset.tab);
+      next.focus();
+    });
+  }
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') $('#settingsModal').classList.add('hidden');
+    if (e.key === 'Escape' && !$('#settingsView').classList.contains('hidden') && $('#trimModal').classList.contains('hidden')) showSettings(false);
   });
 
   $('#setDirBtn').addEventListener('click', async () => {
@@ -737,7 +944,7 @@
     if (r && !r.ok) {
       const msg = $('#engineMsg');
       msg.textContent = r.error;
-      msg.className = 'hint grow error';
+      msg.className = 'hint error';
     }
   });
   $('#appUpdateBtn').addEventListener('click', async () => renderAppUpdate(await api.checkAppUpdate()));
@@ -751,7 +958,7 @@
     await api.copyDiagnostics();
     const m = $('#diagMsg');
     m.textContent = 'Panoya kopyalandı.';
-    m.className = 'hint grow ok';
+    m.className = 'hint ok';
   });
   $('#openLogsBtn').addEventListener('click', () => api.openLogs());
 

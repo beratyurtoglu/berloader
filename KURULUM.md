@@ -37,27 +37,40 @@ npm test
 npm start
 ```
 
-İlk açılışta motorlar indirilir (altta "Motorlar…" yazar).
+İlk açılışta motorlar indirilir (üstte "İndirme motorları hazırlanıyor…" etiketi görünür).
 
 > **Önemli:** Bu komutlardan sonra oluşan **`package-lock.json` dosyasını silme ve GitHub'a yükle.** Otomatik yayın (`npm ci`) buna ihtiyaç duyar.
 
 ## 3) Kullanım
 1. **Önce platformu seç** (YouTube, Instagram, TikTok, X, Pinterest). Seçmeden indirilemez; yapıştırdığın bağlantı seçtiğin platformla uyuşmazsa uyarır.
-2. Bağlantıyı yapıştır, biçimi seç (MP4 / MP3 / M4A / WAV / **Görsel**), **İndir**.
-3. Çoklu gönderilerde (kaydırmalı Instagram, TikTok foto, X, Pinterest) küçük resim paneli açılır; istediklerini seç. "Görsel" biçiminde yalnızca fotoğraflar listelenir.
-4. Her satırda platform rozeti ve "YouTube'dan indiriliyor %43" gibi durum görünür.
-5. Oynatma listesi bağlantısında "tamamını indir?" sorulur; **Hayır** hiçbir şey indirmez. Listeden alınan tek video bağlantısı yalnızca o videoyu indirir.
+2. Bağlantıyı yapıştır. Bağlantı arka planda hemen çözümlenir: başlık, süre ve **videonun gerçekten sunduğu kaliteler** görünür (eski bir videoda en fazla 720p, 8K destekleyen videoda 8K). İndir'e basınca aynı sonuç kullanılır, ikinci kez beklenmez.
+3. Biçimi seç (MP4 / MP3 / M4A / WAV / **Görsel**), **İndir**.
+4. Çoklu gönderilerde (kaydırmalı Instagram, TikTok foto, X, Pinterest) küçük resim paneli açılır; istediklerini seç. "Görsel" biçiminde yalnızca fotoğraflar listelenir.
+5. Oynatma listesi bağlantısında "tamamı sıraya eklensin mi?" sorulur; **Vazgeç** hiçbir şey indirmez.
 
-### Kuyruk ve liste temizliği (v1.2)
-- İndirmeler **sırayla** yapılır: biri bitmeden sıradaki başlamaz. İstersen Ayarlar → "Aynı anda indirilecek sayısı" ile artırabilirsin.
-- Biten işler **24 saat sonra** listeden otomatik kalkar (indirilen dosyalar silinmez). Ayarlar'dan kapatılabilir.
-- **Videonun bir bölümünü indirme (YouTube, v1.3):** "Yalnızca bir bölümü indir" kutusunu işaretleyip İndir'e bas. Video önizlemesi açılır; alttaki şeritte sol ve sağ sürgüyü sürükleyerek başlangıç/bitişi seç (ortadaki alanı sürüklersen bölüm olduğu gibi kayar; ok tuşları 1 sn, Shift+ok 10 sn; − / + düğmeleri ince ayar). "Seçimi oynat" ile seçtiğin parçayı izleyebilirsin. Önizleme açılmazsa sürgüler yine çalışır. Dosya adına bölüm eklenir (ör. `(0.30-1.45)`); tam video varsa üzerine yazılmaz. Oynatma listelerinde çalışmaz.
-- **Kuyruktan başka bölüm:** Biten YouTube video/ses işlerinde "Başka bölüm seç" düğmesi çıkar; aynı videodan yeni bir parça seçip indirirsin (uygulamayı kapatıp açsan da çalışır).
-- **Bakım (v1.3):** `history.json` küçük kalır (yalnızca son 40 işin kapak resmi saklanır); çökme/kapanıştan kalan `.berloader-*` geçici dosyalar açılışta temizlenir (6 saatten eskiler).
+### Keserek indir (YouTube, v1.4)
+- Kalite seçiminin yanındaki **Keserek indir** düğmesine bas, sonra **İndir**. Önizleme açılır, videonun tamamı seçili gelir; giriş ve çıkış sürgüleriyle bölümü daralt.
+- Düğme **tek seferliktir**: indirme sıraya girince kapanır; başka platforma geçince ya da "Görsel" seçince de kapanır. Açık unutup her videoda bölüm seçmek zorunda kalmazsın.
+- İnce ayar **kare kare** yapılır: ‹ › düğmeleri ya da ← → tuşları 1 kare (30 fps videoda 1/30 sn), **Shift** ile 1 saniye. Basılı tutunca hızlı ilerler.
+- **I** ve **O** tuşları oynatma noktasını giriş/çıkış yapar (kurgu programlarındaki gibi); **Boşluk** seçimi oynatır, **Esc** kapatır.
+- Zaman kodları `SS:DD:SN:KK` (saat:dakika:saniye:kare) biçimindedir; kare hızı başlığın yanında yazar.
+- Biten YouTube işlerinde **makas** düğmesiyle aynı videodan yeni bir bölüm kesersin. Bölüm seçmeden indirdiğin bir videoda ekran tüm video seçili açılır.
+- Dosya adına bölüm eklenir (ör. `(0.10-0.15.5)`); tam video varsa üzerine yazılmaz. Oynatma listelerinde çalışmaz.
+
+### Kuyruk
+- İndirmeler **sırayla** yapılır. İstersen Ayarlar → Gelişmiş → "Aynı anda indirilecek sayısı" ile artırabilirsin.
+- Her satırda **bağlantıyı kopyala** düğmesi vardır (hata alan işlerde de). Siteye geri dönüp bağlantıyı aramana gerek kalmaz.
+- Biten işler **24 saat sonra** listeden otomatik kalkar (indirilen dosyalar silinmez). Ayarlar → Genel'den kapatılabilir.
 - **YouTube kapak resmi:** platform YouTube iken biçim olarak "Görsel (kapak resmi)" seç; en yüksek çözünürlüklü JPG iner.
+- **Bakım:** `history.json` küçük kalır (yalnızca son 40 işin kapak resmi saklanır); çökme/kapanıştan kalan `.berloader-*` geçici dosyalar açılışta temizlenir.
+
+### Ayarlar (v1.4)
+- **Genel:** indirme klasörü, platforma göre klasörleme, 24 saat temizliği, uygulama güncellemesi.
+- **Hesaplar:** Instagram, X, TikTok, Pinterest girişleri.
+- **Gelişmiş:** aynı anda indirme sayısı, kurgu programı uyumu (H.264 + AAC), tarayıcı çerezi / cookies.txt, indirme motorları (yt-dlp, gallery-dl, deno, ffmpeg) ve tanılama. Motor sürümleri artık ana ekranda değil burada; motorlar inerken ya da hata olduğunda üstte küçük bir durum etiketi çıkar.
 
 ### Instagram / X / TikTok girişi
-Bu platformlar çoğu içerik için giriş ister: **Ayarlar → Hesaplar → Giriş yap**. Açılan pencereye normal giriş yaparsın; şifre saklanmaz, yalnızca oturum çerezi bu bilgisayarda tutulur. (YouTube için giriş sunulmaz; Google gömülü girişi engeller. Gerekirse Ayarlar → Gelişmiş çerez.)
+Bu platformlar çoğu içerik için giriş ister: **Ayarlar → Hesaplar → Giriş yap**. Açılan pencereye normal giriş yaparsın; şifre saklanmaz, yalnızca oturum çerezi bu bilgisayarda tutulur. (YouTube için giriş sunulmaz; Google gömülü girişi engeller. Gerekirse Ayarlar → Gelişmiş → Çerezler.)
 
 ## 4) Dosya yapısı
 ```
@@ -71,7 +84,9 @@ berloader/
 ```
 
 ## 5) Logo ve kurulum görselleri
-Hepsi çizilip `build/` içine konmuştur (B harfi + yükleme halkası). Değiştirmek istersen **aynı adla** üstüne yaz: `icon.ico` (16–256 px), `icon.png` (512), `renderer/assets/logo.png`, `installerSidebar.bmp` (164×314, 24 bit), `installerHeader.bmp` (150×57, 24 bit). `logo.svg` düzenlenebilir kaynaktır.
+v1.4'te yenilendi: amber giriş/çıkış işaretleri arasında indirme oku (kurgu zaman çizelgesindeki bölüm işareti). Hepsi `build/` içindedir; değiştirmek istersen **aynı adla** üstüne yaz: `icon.ico` (16–256 px), `icon.png` (512), `renderer/assets/logo.svg` ve `logo.png`, `installerSidebar.bmp` (164×314, 24 bit), `installerHeader.bmp` (150×57, 24 bit). `build/logo.svg` düzenlenebilir kaynaktır.
+
+Arayüz yazı tipi **Geist**'tir (SIL Open Font License, `renderer/fonts/`), uygulamanın içinde gelir; internet gerekmez.
 
 ## 6) Kurulum dosyasını üretme
 ```powershell
